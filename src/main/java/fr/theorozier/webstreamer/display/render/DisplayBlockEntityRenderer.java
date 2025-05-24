@@ -7,8 +7,7 @@ import fr.theorozier.webstreamer.display.DisplayBlockEntity;
 import fr.theorozier.webstreamer.mixin.WorldRendererInvoker;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
-// import net.minecraft.block.enums.BlockFace; // Old
-import net.minecraft.util.math.Direction; // A replacement for BlockFace
+import net.minecraft.block.enums.BlockFace;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.font.TextRenderer.TextLayerType;
@@ -23,7 +22,7 @@ import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
-// import net.minecraft.util.math.Direction; // Unused?
+import net.minecraft.util.math.Direction;
 import net.minecraft.util.shape.VoxelShape;
 
 import org.joml.AxisAngle4d;
@@ -35,11 +34,11 @@ import java.util.stream.StreamSupport;
 
 @Environment(EnvType.CLIENT)
 public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBlockEntity> {
-    
+
     private static final Text NO_LAYER_AVAILABLE_TEXT = Text.translatable("gui.webstreamer.display.status.noLayerAvailable");
     private static final Text UNKNOWN_FORMAT_TEXT = Text.translatable("gui.webstreamer.display.status.unknownFormat");
     private static final Text NO_URL_TEXT = Text.translatable("gui.webstreamer.display.status.noUrl");
-    
+
     private static final Quaternionf ROTATE_90 = new Quaternionf(new AxisAngle4d(Math.PI / 2.0, 0.0, 1.0, 0.0));
     private static final Quaternionf ROTATE_180 = new Quaternionf(new AxisAngle4d(Math.PI, 0.0, 1.0, 0.0));
     private static final Quaternionf ROTATE_270 = new Quaternionf(new AxisAngle4d(Math.PI / 2.0 * 3.0, 0.0, 1.0, 0.0));
@@ -49,7 +48,7 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
 
     private final GameRenderer gameRenderer = MinecraftClient.getInstance().gameRenderer;
     private final TextRenderer textRenderer;
-    
+
     @SuppressWarnings("unused")
     public DisplayBlockEntityRenderer(BlockEntityRendererFactory.Context ctx) {
         this.textRenderer = ctx.getTextRenderer();
@@ -57,7 +56,7 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
 
     @Override
     public void render(DisplayBlockEntity entity, float tickDelta, MatrixStack matrices, VertexConsumerProvider vertexConsumers, int light, int overlay) {
-    
+
         // Get the render data from the block entity, this is just an extension to the
         // block entity, so it will always be present and is lazily instantiated and will
         // last as long as the block entity.
@@ -69,45 +68,79 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
 
         DisplayLayerManager layerManager = WebStreamerClientMod.DISPLAY_LAYERS;
         Text statusText = null;
-        
+
         // Asynchronously get the URI of this display, if the URI is not yet available,
         // null is just returned.
         URI uri = renderData.getUri(layerManager.getResources().getExecutor());
-        
+
         // If the player is currently holding a display item, we draw the outline shape
         // of the display block, we also display as status text the source status.
         PlayerEntity player = MinecraftClient.getInstance().player;
         if (player != null) {
-    
+
             boolean hasDisplayEquipped = StreamSupport.stream(player.getItemsEquipped().spliterator(), false)
                     .map(ItemStack::getItem)
                     .anyMatch(WebStreamerMod.DISPLAY_ITEM::equals);
-    
+
             if (hasDisplayEquipped) {
-        
+
                 VoxelShape displayShape = entity.getCachedState().getOutlineShape(entity.getWorld(), entity.getPos());
                 if (displayShape != null) {
                     matrices.push();
                     WorldRendererInvoker.drawCuboidShapeOutline(matrices, vertexConsumers.getBuffer(RenderLayer.getLines()), displayShape, 0, 0, 0, 235 / 255f, 168 / 255f, 0f, 1f);
                     matrices.pop();
                 }
-        
+
                 statusText = Text.literal(entity.getSource().getStatus());
-        
+
             }
-            
+
         }
 
-        // BlockFace attachment = entity.getCachedState().get(DisplayBlock.PROP_ATTACHMENT);
-        Direction attachment = entity.getCachedState().get(DisplayBlock.PROP_ATTACHMENT);
+        BlockFace attachment = entity.getCachedState().get(DisplayBlock.PROP_ATTACHMENT);
         Direction facing = entity.getCachedState().get(DisplayBlock.PROP_FACING);
 
         matrices.push();
 
+        // Apply block position offset first
         switch (attachment) {
-            case NORTH, EAST, SOUTH, WEST -> matrices.translate(0.5f - facing.getOffsetX(), 0.5f, 0.5f - facing.getOffsetZ());
-            case UP -> matrices.translate(0.5f, -0.5f, 0.5f); // Previously FLOOR
-            case DOWN -> matrices.translate(0.5f, 1.5f, 0.5f); // Previously CEILING
+            case WALL -> matrices.translate(0.5f - facing.getOffsetX(), 0.5f, 0.5f - facing.getOffsetZ());
+            case FLOOR -> matrices.translate(0.5f, -0.5f, 0.5f);
+            case CEILING -> matrices.translate(0.5f, 1.5f, 0.5f);
+        }
+
+        // Apply user-defined offset based on attachment orientation
+        double offsetX = entity.getOffsetX();
+        double offsetY = entity.getOffsetY();
+
+        switch (attachment) {
+            case WALL -> {
+                // For wall-mounted displays, apply offset in world coordinates
+                switch (facing) {
+                    case NORTH -> matrices.translate(offsetX, offsetY, 0);
+                    case SOUTH -> matrices.translate(-offsetX, offsetY, 0);
+                    case EAST -> matrices.translate(0, offsetY, offsetX);
+                    case WEST -> matrices.translate(0, offsetY, -offsetX);
+                }
+            }
+            case FLOOR -> {
+                // For floor-mounted displays, X offset is horizontal, Y offset is in facing direction
+                switch (facing) {
+                    case NORTH -> matrices.translate(offsetX, 0, -offsetY);
+                    case SOUTH -> matrices.translate(-offsetX, 0, offsetY);
+                    case EAST -> matrices.translate(offsetY, 0, offsetX);
+                    case WEST -> matrices.translate(-offsetY, 0, -offsetX);
+                }
+            }
+            case CEILING -> {
+                // For ceiling-mounted displays, X offset is horizontal, Y offset is in facing direction
+                switch (facing) {
+                    case NORTH -> matrices.translate(offsetX, 0, offsetY);
+                    case SOUTH -> matrices.translate(-offsetX, 0, -offsetY);
+                    case EAST -> matrices.translate(-offsetY, 0, offsetX);
+                    case WEST -> matrices.translate(offsetY, 0, -offsetX);
+                }
+            }
         }
 
         switch (facing) {
@@ -119,16 +152,16 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
         }
 
         switch (attachment) {
-            case NORTH, EAST, SOUTH, WEST -> {}
-            case UP -> matrices.multiply(ROTATE_FLOOR); // Previously FLOOR
-            case DOWN -> matrices.multiply(ROTATE_CEILING); // Previously CEILING
+            case WALL -> {}
+            case FLOOR -> matrices.multiply(ROTATE_FLOOR);
+            case CEILING -> matrices.multiply(ROTATE_CEILING);
         }
 
         if (uri != null) {
             try {
 
                 DisplayLayer layer = layerManager.getLayer(new DisplayLayerNode.Key(uri, entity));
-    
+
                 if (layer.isLost()) {
                     // Each time a display get here and the layer is lost, and then we request
                     // a URL reset for the render data. With twitch sources it should reset
@@ -138,7 +171,7 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
                 }
 
                 VertexConsumer buffer = vertexConsumers.getBuffer(layer.getRenderLayer());
-    
+
                 BlockPos pos = entity.getPos();
                 float audioDistance = entity.getAudioDistance();
                 float audioVolume = entity.getAudioVolume();
@@ -166,11 +199,11 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
         } else {
             statusText = NO_URL_TEXT;
         }
-    
+
         if (statusText != null) {
 
             matrices.push();
-    
+
             final float scaleFactor = 128f / Math.min(entity.getWidth(), entity.getHeight());
             final float scale = 1f / scaleFactor;
             final float halfWidth = this.textRenderer.getWidth(statusText) / scaleFactor / 2f;
@@ -180,7 +213,7 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
             matrices.scale(-scale, -scale, 1f);
             this.textRenderer.draw(statusText, 0f, 0f, 0x00ffffff, false, matrices.peek().getPositionMatrix(), vertexConsumers, TextLayerType.NORMAL, 0xBB222222, light);
             matrices.pop();
-    
+
         }
 
         matrices.pop();

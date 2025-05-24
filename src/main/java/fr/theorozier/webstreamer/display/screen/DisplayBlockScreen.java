@@ -33,6 +33,8 @@ public class DisplayBlockScreen extends Screen {
     private static final Text CONF_TEXT = Text.translatable("gui.webstreamer.display.conf");
     private static final Text WIDTH_TEXT = Text.translatable("gui.webstreamer.display.width");
     private static final Text HEIGHT_TEXT = Text.translatable("gui.webstreamer.display.height");
+    private static final Text OFFSET_X_TEXT = Text.translatable("gui.webstreamer.display.offsetX");
+    private static final Text OFFSET_Y_TEXT = Text.translatable("gui.webstreamer.display.offsetY");
     private static final Text SOURCE_TYPE_TEXT = Text.translatable("gui.webstreamer.display.sourceType");
     private static final Text SOURCE_TYPE_RAW_TEXT = Text.translatable("gui.webstreamer.display.sourceType.raw");
     private static final Text SOURCE_TYPE_TWITCH_TEXT = Text.translatable("gui.webstreamer.display.sourceType.twitch");
@@ -45,6 +47,7 @@ public class DisplayBlockScreen extends Screen {
 
     private static final Text ERR_PENDING = Text.translatable("gui.webstreamer.display.error.pending");
     private static final Text ERR_INVALID_SIZE = Text.translatable("gui.webstreamer.display.error.invalidSize");
+    private static final Text ERR_INVALID_OFFSET = Text.translatable("gui.webstreamer.display.error.invalidOffset");
     private static final Text ERR_TWITCH = Text.translatable("gui.webstreamer.display.error.twitch");
     private static final Text ERR_NO_TOKEN_TEXT = Text.translatable("gui.webstreamer.display.error.noToken");
     private static final Text ERR_CHANNEL_NOT_FOUND_TEXT = Text.translatable("gui.webstreamer.display.error.channelNotFound");
@@ -56,7 +59,7 @@ public class DisplayBlockScreen extends Screen {
     /** The block entity this screen is opened on. The following fields are temporaries to save later. */
     private final DisplayBlockEntity display;
 
-    private TextFieldWidget widthField, heightField;
+    private TextFieldWidget widthField, heightField, offsetXField, offsetYField;
     private AudioDistanceSliderWidget audioDistanceSlider;
     private AudioVolumeSliderWidget audioVolumeSlider;
     private CyclingButtonWidget<SourceType> sourceTypeButton;
@@ -84,7 +87,7 @@ public class DisplayBlockScreen extends Screen {
         int xHalf = this.width / 2;
         int yTop = 60;
 
-        if (this.height < 270) {
+        if (this.height < 320) {
             yTop = 35;
         }
 
@@ -93,6 +96,7 @@ public class DisplayBlockScreen extends Screen {
         confText.setTextColor(0xFFFFFF);
         this.addDrawableChild(confText);
 
+        // Size section
         TextWidget widthText = new TextWidget(WIDTH_TEXT, this.textRenderer);
         widthText.setPosition(xHalf - 154, yTop + 1);
         widthText.setTextColor(0xA0A0A0);
@@ -117,6 +121,31 @@ public class DisplayBlockScreen extends Screen {
         heightField.setChangedListener(val -> this.dirty = true);
         this.addDrawableChild(heightField);
 
+        // Offset section
+        TextWidget offsetXText = new TextWidget(OFFSET_X_TEXT, this.textRenderer);
+        offsetXText.setPosition(xHalf - 38, yTop + 1);
+        offsetXText.setTextColor(0xA0A0A0);
+        offsetXText.alignLeft();
+        this.addDrawableChild(offsetXText);
+
+        TextWidget offsetYText = new TextWidget(OFFSET_Y_TEXT, this.textRenderer);
+        offsetYText.setPosition(xHalf + 20, yTop + 1);
+        offsetYText.setTextColor(0xA0A0A0);
+        offsetYText.alignLeft();
+        this.addDrawableChild(offsetYText);
+
+        String offsetXVal = offsetXField == null ? Double.toString(this.display.getOffsetX()) : offsetXField.getText();
+        offsetXField = new TextFieldWidget(this.textRenderer, xHalf - 38, yTop + 11, 50, 18, Text.empty());
+        offsetXField.setText(offsetXVal);
+        offsetXField.setChangedListener(val -> this.dirty = true);
+        this.addDrawableChild(offsetXField);
+
+        String offsetYVal = offsetYField == null ? Double.toString(this.display.getOffsetY()) : offsetYField.getText();
+        offsetYField = new TextFieldWidget(this.textRenderer, xHalf + 20, yTop + 11, 50, 18, Text.empty());
+        offsetYField.setText(offsetYVal);
+        offsetYField.setChangedListener(val -> this.dirty = true);
+        this.addDrawableChild(offsetYField);
+
         DisplaySource source = this.display.getSource();
         SourceType sourceType = SourceType.RAW;
         if (sourceTypeButton != null) {
@@ -127,7 +156,7 @@ public class DisplayBlockScreen extends Screen {
 
         sourceTypeButton = CyclingButtonWidget.builder(SourceType::getText)
                 .values(SourceType.values())
-                .build(xHalf - 38, yTop + 10, 192, 20, SOURCE_TYPE_TEXT, (widget, val) -> {
+                .build(xHalf + 78, yTop + 10, 76, 20, SOURCE_TYPE_TEXT, (widget, val) -> {
                     // When cycling, we reset the UI to adapt for the new source type.
                     if (this.client != null) {
                         this.init(this.client, this.width, this.height);
@@ -215,9 +244,7 @@ public class DisplayBlockScreen extends Screen {
         }
 
         errorText = new TextWidget(Text.empty(), this.textRenderer);
-        // errorText.setDimensionsAndPosition(this.width, 0, 0, ySourceBottom);
-        errorText.setPosition(0, ySourceBottom);
-        errorText.setWidth(this.width);
+        errorText.setDimensionsAndPosition(this.width, 0, 0, ySourceBottom);
         errorText.setTextColor(0xFF6052);
         errorText.visible = false;
         this.addDrawableChild(errorText);
@@ -265,12 +292,21 @@ public class DisplayBlockScreen extends Screen {
     private boolean refresh(boolean commit) {
 
         float width, height;
+        double offsetX, offsetY;
 
         try {
             width = Float.parseFloat(this.widthField.getText());
             height = Float.parseFloat(this.heightField.getText());
         } catch (NumberFormatException e) {
             this.showError(ERR_INVALID_SIZE);
+            return false;
+        }
+
+        try {
+            offsetX = Double.parseDouble(this.offsetXField.getText());
+            offsetY = Double.parseDouble(this.offsetYField.getText());
+        } catch (NumberFormatException e) {
+            this.showError(ERR_INVALID_OFFSET);
             return false;
         }
 
@@ -328,6 +364,7 @@ public class DisplayBlockScreen extends Screen {
         if (commit) {
 
             this.display.setSize(width, height);
+            this.display.setOffset(offsetX, offsetY);
 
             float audioDistance = this.audioDistanceSlider.getDistance();
             float audioVolume = this.audioVolumeSlider.getVolume();
@@ -418,190 +455,6 @@ public class DisplayBlockScreen extends Screen {
 
     }
 
-//    /**
-//     * A basic source screen.
-//     */
-//    private abstract static class SourceScreen<S extends DisplaySource> {
-//
-//        protected final S source;
-//
-//        SourceScreen(S source) {
-//            this.source = source;
-//        }
-//
-//        abstract boolean valid();
-//        abstract void init();
-//        abstract void tick();
-//
-//    }
-//
-//    /**
-//     * Screen for raw sources.
-//     */
-//    private class RawSourceScreen extends SourceScreen<RawDisplaySource> {
-//
-//        private TextWidget urlText;
-//        private TextWidget malformedUrlText;
-//        private TextFieldWidget urlField;
-//
-//        private final AsyncProcessor<String, URI, IllegalArgumentException> asyncUri = new AsyncProcessor<>(URI::create);
-//
-//        RawSourceScreen(RawDisplaySource source) {
-//            super(source);
-//        }
-//
-//        RawSourceScreen() {
-//            this(new RawDisplaySource());
-//        }
-//
-//        @Override
-//        public boolean valid() {
-//            return this.asyncUri.idle();
-//        }
-//
-//        @Override
-//        public void init() {
-//
-//            boolean first = (this.urlField == null);
-//
-//            this.urlText = new TextWidget(xHalf - 154, ySourceTop, URL_TEXT, textRenderer);
-//            this.urlText.setTextColor(0xA0A0A0);
-//            addDrawableChild(this.urlText);
-//
-//            this.malformedUrlText = new TextWidget(xHalf, ySourceTop + 50, MALFORMED_URL_TEXT, textRenderer);
-//            this.malformedUrlText.setTextColor(0xFF6052);
-//            addDrawableChild(this.malformedUrlText);
-//
-//            this.urlField = new TextFieldWidget(textRenderer, xHalf - 154, ySourceTop + 10, 308, 20, this.urlField, Text.empty());
-//            this.urlField.setMaxLength(32000);
-//            this.urlField.setChangedListener(this::onUrlChanged);
-//            setInitialFocus(this.urlField);
-//            addDrawableChild(this.urlField);
-//
-//            if (first) {
-//                this.urlField.setText(Objects.toString(this.source.getUri(), ""));
-//            }
-//
-//        }
-//
-//        @Override
-//        public void tick() {
-//            this.asyncUri.fetch(executor, this.source::setUri, exc -> this.source.setUri(null));
-//            this.urlText.visible = (this.source.getUri() != null);
-//        }
-//
-//        private void onUrlChanged(String rawUrl) {
-//            this.asyncUri.push(rawUrl);
-//        }
-//
-//    }
-//
-//    private class TwitchSourceScreen extends SourceScreen<TwitchDisplaySource> {
-//
-//        private TextFieldWidget channelField;
-//        private QualitySliderWidget qualitySlider;
-//
-//        private String firstQuality;
-//
-//        private final AsyncProcessor<String, Playlist, TwitchClient.PlaylistException> asyncPlaylist;
-//        private Playlist playlist;
-//        private Text playlistError;
-//
-//        TwitchSourceScreen(TwitchDisplaySource source) {
-//            super(source);
-//            this.firstQuality = source.getQuality();
-//            this.asyncPlaylist = new AsyncProcessor<>(WebStreamerClientMod.TWITCH_CLIENT::requestPlaylist);
-//        }
-//
-//        TwitchSourceScreen() {
-//            this(new TwitchDisplaySource());
-//        }
-//
-//        @Override
-//        public boolean valid() {
-//            return this.asyncPlaylist.idle();
-//        }
-//
-//        @Override
-//        public void init() {
-//
-//            boolean first = (this.channelField == null);
-//
-//            this.channelField = new TextFieldWidget(textRenderer, xHalf - 154, ySourceTop + 10, 308, 20, this.channelField, Text.empty());
-//            this.channelField.setMaxLength(64);
-//            this.channelField.setChangedListener(this::onChannelChanged);
-//            addSelectableChild(this.channelField);
-//            setInitialFocus(this.channelField);
-//            addDrawableChild(this.channelField);
-//
-//            this.qualitySlider = new QualitySliderWidget(xHalf - 154, ySourceTop + 50, 308, 20, this.qualitySlider);
-//            this.qualitySlider.setChangedListener(this::onQualityChanged);
-//            this.updateQualitySlider();
-//            addSelectableChild(this.qualitySlider);
-//            addDrawableChild(this.qualitySlider);
-//
-//            if (first) {
-//                this.channelField.setText(Objects.toString(this.source.getChannel(), ""));
-//            }
-//
-//        }
-//
-//        @Override
-//        public void render(MatrixStack matrices, int mouseX, int mouseY, float delta) {
-//            drawTextWithShadow(matrices, textRenderer, CHANNEL_TEXT, xHalf - 154, ySourceTop, 0xA0A0A0);
-//            if (this.playlistError == null) {
-//                drawTextWithShadow(matrices, textRenderer, QUALITY_TEXT, xHalf - 154, ySourceTop + 40, 0xA0A0A0);
-//            } else {
-//                drawCenteredText(matrices, textRenderer, this.playlistError, xHalf, ySourceTop + 50, 0xFF6052);
-//            }
-//        }
-//
-//        @Override
-//        public void tick() {
-//
-//            this.channelField.tick();
-//
-//            this.asyncPlaylist.fetch(executor, pl -> {
-//                this.playlist = pl;
-//                this.qualitySlider.setQualities(pl.getQualities());
-//                if (this.firstQuality != null) {
-//                    this.qualitySlider.setQuality(this.firstQuality);
-//                    this.firstQuality = null;
-//                }
-//                this.playlistError = null;
-//                this.updateQualitySlider();
-//            }, exc -> {
-//                this.playlist = null;
-//                this.qualitySlider.setQualities(null);
-//                this.playlistError = switch (exc.getExceptionType()) {
-//                    case UNKNOWN -> Text.translatable(ERR_UNKNOWN_TEXT_KEY, "");
-//                    case NO_TOKEN -> ERR_NO_TOKEN_TEXT;
-//                    case CHANNEL_NOT_FOUND -> ERR_CHANNEL_NOT_FOUND_TEXT;
-//                    case CHANNEL_OFFLINE -> ERR_CHANNEL_OFFLINE_TEXT;
-//                };
-//                this.updateQualitySlider();
-//            });
-//
-//        }
-//
-//        private void onChannelChanged(String channel) {
-//            this.asyncPlaylist.push(channel);
-//        }
-//
-//        private void onQualityChanged(PlaylistQuality quality) {
-//            if (quality == null) {
-//                this.source.clearChannelQuality();
-//            } else if (this.playlist != null) {
-//                this.source.setChannelQuality(this.playlist.getChannel(), quality.name());
-//            }
-//        }
-//
-//        private void updateQualitySlider() {
-//            this.qualitySlider.visible = (this.playlistError == null);
-//        }
-//
-//    }
-
     /**
      * Internal class for specializing the slider widget for playlist quality.
      */
@@ -622,13 +475,13 @@ public class DisplayBlockScreen extends Screen {
                 this.setQualities(null);
             }
         }
-    
+
         public void setQualities(List<PlaylistQuality> qualities) {
             this.qualities = qualities;
             this.applyValue();
             this.updateMessage();
         }
-        
+
         public void setQuality(String quality) {
             for (int i = 0; i < this.qualities.size(); i++) {
                 if (this.qualities.get(i).name().equals(quality)) {
@@ -692,48 +545,48 @@ public class DisplayBlockScreen extends Screen {
      * Custom slider widget for audio distance to block entity.
      */
     private static class AudioDistanceSliderWidget extends SliderWidget {
-        
+
         private final float maxDistance;
         private Consumer<Float> changedListener;
-        
+
         public AudioDistanceSliderWidget(int x, int y, int width, int height, float distance, float maxDistance) {
             super(x, y, width, height, Text.empty(), distance / maxDistance);
             this.maxDistance = maxDistance;
             this.updateMessage();
         }
-        
+
         public void setChangedListener(Consumer<Float> changedListener) {
             this.changedListener = changedListener;
         }
-        
+
         public float getDistance() {
             return (float) (this.value * this.maxDistance);
         }
-        
+
         @Override
         protected void updateMessage() {
             this.setMessage(Text.translatable(AUDIO_DISTANCE_TEXT_KEY).append(": ").append(Integer.toString((int) this.getDistance())));
         }
-        
+
         @Override
         protected void applyValue() {
             this.changedListener.accept(this.getDistance());
         }
-        
+
     }
 
     /**
      * Custom slider widget for audio volume from block entity.
      */
     private static class AudioVolumeSliderWidget extends SliderWidget {
-        
+
         private Consumer<Float> changedListener;
-    
+
         public AudioVolumeSliderWidget(int x, int y, int width, int height, float value) {
             super(x, y, width, height, Text.empty(), value);
             this.updateMessage();
         }
-    
+
         public void setChangedListener(Consumer<Float> changedListener) {
             this.changedListener = changedListener;
         }
@@ -741,18 +594,18 @@ public class DisplayBlockScreen extends Screen {
         public float getVolume() {
             return (float) this.value;
         }
-    
+
         @Override
         protected void updateMessage() {
             Text text = (this.value == 0.0) ? ScreenTexts.OFF : Text.literal((int)(this.value * 100.0) + "%");
             this.setMessage(Text.translatable(AUDIO_VOLUME_TEXT_KEY).append(": ").append(text));
         }
-    
+
         @Override
         protected void applyValue() {
             this.changedListener.accept((float) this.value);
         }
-        
+
     }
 
 }
