@@ -31,6 +31,7 @@ public class DisplayBlockEntity extends BlockEntity {
     private float audioVolume = 1f;
     private double offsetX = 0.0;
     private double offsetY = 0.0;
+    private double offsetZ = 0.0;
 
     public DisplayBlockEntity(BlockPos pos, BlockState state) {
         super(WebStreamerMod.DISPLAY_BLOCK_ENTITY, pos, state);
@@ -86,9 +87,10 @@ public class DisplayBlockEntity extends BlockEntity {
         return audioVolume;
     }
 
-    public void setOffset(double offsetX, double offsetY) {
+    public void setOffset(double offsetX, double offsetY, double offsetZ) {
         this.offsetX = offsetX;
         this.offsetY = offsetY;
+        this.offsetZ = offsetZ;
         this.markDirty();
     }
 
@@ -98,6 +100,10 @@ public class DisplayBlockEntity extends BlockEntity {
 
     public double getOffsetY() {
         return offsetY;
+    }
+
+    public double getOffsetZ() {
+        return offsetZ;
     }
 
     @Override
@@ -114,6 +120,7 @@ public class DisplayBlockEntity extends BlockEntity {
         displayNbt.putFloat("audioVolume", this.audioVolume);
         displayNbt.putDouble("offsetX", this.offsetX);
         displayNbt.putDouble("offsetY", this.offsetY);
+        displayNbt.putDouble("offsetZ", this.offsetZ);
 
         if (this.source != null) {
             displayNbt.putString("type", this.source.getType());
@@ -165,6 +172,12 @@ public class DisplayBlockEntity extends BlockEntity {
                 this.offsetY = offsetY.doubleValue();
             } else {
                 this.offsetY = 0.0;
+            }
+
+            if (displayNbt.get("offsetZ") instanceof NbtDouble offsetZ) {
+                this.offsetZ = offsetZ.doubleValue();
+            } else {
+                this.offsetZ = 0.0;
             }
 
             if (displayNbt.get("type") instanceof NbtString type) {

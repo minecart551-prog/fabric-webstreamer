@@ -1,250 +1,148 @@
 package fr.theorozier.webstreamer.display;
 
-import fr.theorozier.webstreamer.WebStreamerMod;
-import fr.theorozier.webstreamer.display.source.DisplaySource;
-import fr.theorozier.webstreamer.display.source.RawDisplaySource;
-import net.minecraft.block.BlockState;
+import net.minecraft.block.*;
 import net.minecraft.block.entity.BlockEntity;
-import net.minecraft.nbt.NbtCompound;
-import net.minecraft.nbt.NbtDouble;
-import net.minecraft.nbt.NbtFloat;
-import net.minecraft.nbt.NbtString;
-import net.minecraft.network.listener.ClientPlayPacketListener;
-import net.minecraft.network.packet.Packet;
-import net.minecraft.network.packet.s2c.play.BlockEntityUpdateS2CPacket;
+// import net.minecraft.block.enums.BlockFace; // Not available in 1.20.1
+import net.minecraft.util.math.Direction; // A replacement for BlockFace
+import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.item.ItemPlacementContext;
+import net.minecraft.sound.BlockSoundGroup;
+import net.minecraft.state.StateManager;
+import net.minecraft.state.property.DirectionProperty;
+import net.minecraft.state.property.EnumProperty;
+import net.minecraft.state.property.Properties;
+import net.minecraft.util.ActionResult;
+import net.minecraft.util.Hand;
+import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
+// import net.minecraft.util.math.Direction; // Unused?
+import net.minecraft.util.shape.VoxelShape;
+import net.minecraft.util.shape.VoxelShapes;
+import net.minecraft.world.BlockView;
+import net.minecraft.world.World;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.Objects;
+// import com.mojang.serialization.MapCodec; // Old
 
-/**
- * <p>The block entity that is backing {@link DisplayBlock}, it's mainly composed of the
- * {@link DisplaySource}, size and audio configuration.</p>
- */
-public class DisplayBlockEntity extends BlockEntity {
+public class DisplayBlock extends BlockWithEntity {
 
-    private DisplaySource source = new RawDisplaySource();
-    private float width = 1;
-    private float height = 1;
-    private float audioDistance = 10f;
-    private float audioVolume = 1f;
-    private double offsetX = 0.0;
-    private double offsetY = 0.0;
-    private double offsetZ = 0.0;
+    // public static final MapCodec<DisplayBlock> CODEC = DisplayBlock.createCodec(DisplayBlock::new); // Old
 
-    public DisplayBlockEntity(BlockPos pos, BlockState state) {
-        super(WebStreamerMod.DISPLAY_BLOCK_ENTITY, pos, state);
+
+    public static final DirectionProperty PROP_FACING = Properties.HORIZONTAL_FACING;
+    // public static final EnumProperty<BlockFace> PROP_ATTACHMENT = EnumProperty.of("attachment", BlockFace.class, BlockFace.WALL, BlockFace.FLOOR, BlockFace.CEILING); // Old
+    public static final EnumProperty<Direction> PROP_ATTACHMENT = EnumProperty.of("attachment", Direction.class, Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST, Direction.UP, Direction.DOWN);
+
+    private static final VoxelShape SHAPE_NORTH = VoxelShapes.cuboid(0, 0, 0.9, 1, 1, 1);
+    private static final VoxelShape SHAPE_SOUTH = VoxelShapes.cuboid(0, 0, 0, 1, 1, 0.1);
+    private static final VoxelShape SHAPE_WEST = VoxelShapes.cuboid(0.9, 0, 0, 1, 1, 1);
+    private static final VoxelShape SHAPE_EAST = VoxelShapes.cuboid(0, 0, 0, 0.1, 1, 1);
+    private static final VoxelShape SHAPE_FLOOR = VoxelShapes.cuboid(0, 0, 0, 1, 0.1, 1);
+    private static final VoxelShape SHAPE_CEILING = VoxelShapes.cuboid(0, 0.9, 0, 1, 1.0, 1);
+
+    public DisplayBlock(Settings settings) {
+        super(settings);
     }
 
-    public void setSource(@NotNull DisplaySource source) {
-        Objects.requireNonNull(source);
-        this.source = source;
-        this.markRenderDataSourceDirty();
-        this.markDirty();
-    }
-
-    @NotNull
-    public DisplaySource getSource() {
-        return source;
-    }
-
-    /**
-     * Reset the internal source URI, that is currently used with Twitch sources in order
-     * to reset the channels' cache. This also mark the render data as dirty in order to
-     * update the URI on next render.
-     */
-    public void resetSourceUri() {
-        this.source.resetUri();
-        this.markRenderDataSourceDirty();
-    }
-
-    public void setSize(float width, float height) {
-        this.width = width;
-        this.height = height;
-        this.markDirty();
-    }
-
-    public float getWidth() {
-        return width;
-    }
-
-    public float getHeight() {
-        return height;
-    }
-
-    public void setAudioConfig(float distance, float volume) {
-        this.audioDistance = distance;
-        this.audioVolume = volume;
-        this.markDirty();
-    }
-
-    public float getAudioDistance() {
-        return audioDistance;
-    }
-
-    public float getAudioVolume() {
-        return audioVolume;
-    }
-
-    public void setOffset(double offsetX, double offsetY, double offsetZ) {
-        this.offsetX = offsetX;
-        this.offsetY = offsetY;
-        this.offsetZ = offsetZ;
-        this.markDirty();
-    }
-
-    public double getOffsetX() {
-        return offsetX;
-    }
-
-    public double getOffsetY() {
-        return offsetY;
-    }
-
-    public double getOffsetZ() {
-        return offsetZ;
+    public DisplayBlock() {
+        this(Settings.create()
+                .sounds(BlockSoundGroup.GLASS)
+                .strength(-1.0f, 3600000.0f)
+                .requiresTool()
+                .dropsNothing()
+                .nonOpaque());
     }
 
     @Override
-    protected void writeNbt(NbtCompound nbt) {
-
-        super.writeNbt(nbt);
-
-        NbtCompound displayNbt = new NbtCompound();
-        nbt.put("display", displayNbt);
-
-        displayNbt.putFloat("width", this.width);
-        displayNbt.putFloat("height", this.height);
-        displayNbt.putFloat("audioDistance", this.audioDistance);
-        displayNbt.putFloat("audioVolume", this.audioVolume);
-        displayNbt.putDouble("offsetX", this.offsetX);
-        displayNbt.putDouble("offsetY", this.offsetY);
-        displayNbt.putDouble("offsetZ", this.offsetZ);
-
-        if (this.source != null) {
-            displayNbt.putString("type", this.source.getType());
-            this.source.writeNbt(displayNbt);
-        } else {
-            displayNbt.putString("type", "");
-        }
-
-    }
-
-    @Override
-    public void readNbt(NbtCompound nbt) {
-
-        super.readNbt(nbt);
-
-        if (nbt.get("display") instanceof NbtCompound displayNbt) {
-
-            if (displayNbt.get("width") instanceof NbtFloat width) {
-                this.width = width.floatValue();
-            } else {
-                this.width = 1;
-            }
-
-            if (displayNbt.get("height") instanceof NbtFloat height) {
-                this.height = height.floatValue();
-            } else {
-                this.height = 1;
-            }
-
-            if (displayNbt.get("audioDistance") instanceof NbtFloat audioDistance) {
-                this.audioDistance = audioDistance.floatValue();
-            } else {
-                this.audioDistance = 10f;
-            }
-
-            if (displayNbt.get("audioVolume") instanceof NbtFloat audioVolume) {
-                this.audioVolume = audioVolume.floatValue();
-            } else {
-                this.audioVolume = 1f;
-            }
-
-            if (displayNbt.get("offsetX") instanceof NbtDouble offsetX) {
-                this.offsetX = offsetX.doubleValue();
-            } else {
-                this.offsetX = 0.0;
-            }
-
-            if (displayNbt.get("offsetY") instanceof NbtDouble offsetY) {
-                this.offsetY = offsetY.doubleValue();
-            } else {
-                this.offsetY = 0.0;
-            }
-
-            if (displayNbt.get("offsetZ") instanceof NbtDouble offsetZ) {
-                this.offsetZ = offsetZ.doubleValue();
-            } else {
-                this.offsetZ = 0.0;
-            }
-
-            if (displayNbt.get("type") instanceof NbtString type) {
-                this.source = DisplaySource.newSourceFromType(type.asString());
-                this.source.readNbt(displayNbt);
-            } else {
-                this.source = new RawDisplaySource();
-            }
-
-            this.markRenderDataSourceDirty();
-
-        }
-
+    protected void appendProperties(StateManager.Builder<Block, BlockState> builder) {
+        builder.add(PROP_FACING);
+        builder.add(PROP_ATTACHMENT);
     }
 
     @Nullable
     @Override
-    public Packet<ClientPlayPacketListener> toUpdatePacket() {
-        return BlockEntityUpdateS2CPacket.create(this);
+    public BlockEntity createBlockEntity(BlockPos pos, BlockState state) {
+        return new DisplayBlockEntity(pos, state);
     }
 
     @Override
-    public NbtCompound toInitialChunkDataNbt() {
-        return createNbt();
+    public BlockRenderType getRenderType(BlockState state) {
+        return BlockRenderType.ENTITYBLOCK_ANIMATED;
     }
 
-    /** Utility method to make a log message prefixed by this display's position. */
-    public String makeLog(String message) {
-        return "[" + this.pos.getX() + "/" + this.pos.getY() + "/" + this.pos.getZ() + "] " + message;
+    @Nullable
+    @Override
+    public BlockState getPlacementState(ItemPlacementContext ctx) {
+
+        PlayerEntity playerEntity = ctx.getPlayer();
+        if (playerEntity != null && !canPlace(playerEntity)) {
+            return null;
+        }
+
+        Direction dir = ctx.getSide();
+        // BlockFace face = BlockFace.WALL; // Old
+        Direction face = dir;
+
+        /*
+        if (dir == Direction.DOWN) {
+            face = BlockFace.CEILING;
+        } else if (dir == Direction.UP) {
+            face = BlockFace.FLOOR;
+        }
+        */
+
+        if (face != Direction.NORTH && face != Direction.SOUTH && face != Direction.EAST && face != Direction.WEST) {
+            dir = ctx.getHorizontalPlayerFacing().getOpposite();
+        }
+
+        return this.getDefaultState()
+                .with(PROP_FACING, dir)
+                .with(PROP_ATTACHMENT, face);
+
     }
 
-    /*
-     * == RENDER DATA
-     *
-     * The render data is present on both server and client side, but is only actually
-     * used on client side for storing the display render data.
-     */
+    @Override
+    public VoxelShape getOutlineShape(BlockState state, BlockView world, BlockPos pos, ShapeContext context) {
+        return switch (state.get(PROP_ATTACHMENT)) {
+            case NORTH, SOUTH, EAST, WEST -> switch (state.get(PROP_FACING)) {
+                case NORTH -> SHAPE_NORTH;
+                case SOUTH -> SHAPE_SOUTH;
+                case EAST -> SHAPE_EAST;
+                case WEST -> SHAPE_WEST;
+                default -> null;
+            };
+            case DOWN -> SHAPE_FLOOR;
+            case UP -> SHAPE_CEILING;
+        };
+    }
 
-    private final Object cachedRenderDataGuard = new Object();
-    private Object cachedRenderData;
-
-    /**
-     * <b>Should only be called from client side.</b>
-     *
-     * @return A <code>DisplayRenderData</code> class, only valid on client side.
-     */
-    public Object getRenderData() {
-        synchronized (this.cachedRenderDataGuard) {
-            if (this.cachedRenderData == null) {
-                this.cachedRenderData = new fr.theorozier.webstreamer.display.render.DisplayRenderData(this);
+    @Override
+    public ActionResult onUse(BlockState state, World world, BlockPos pos, PlayerEntity player, Hand hand, BlockHitResult hit) {
+        BlockEntity be = world.getBlockEntity(pos);
+        if (canUse(player) && be instanceof DisplayBlockEntity dbe) {
+            if (player instanceof DisplayBlockInteract interact) {
+                interact.openDisplayBlockScreen(dbe);
+                return ActionResult.success(world.isClient);
+            } else {
+                return ActionResult.CONSUME;
             }
-            return this.cachedRenderData;
+        } else {
+            return ActionResult.PASS;
         }
     }
 
-    /**
-     * This internal method is used to mark internal render data URL as dirty.
-     * This might be used from any side and is thread-safe.
-     * This will actually do something only on the client-side and only if the
-     * render data has been requested before.
-     */
-    private void markRenderDataSourceDirty() {
-        synchronized (this.cachedRenderDataGuard) {
-            if (this.cachedRenderData != null) {
-                ((fr.theorozier.webstreamer.display.render.DisplayRenderData) this.cachedRenderData).markSourceDirty();
-            }
-        }
+    public static boolean canPlace(@NotNull PlayerEntity player) {
+        return player.hasPermissionLevel(2);
     }
+
+    public static boolean canUse(@NotNull PlayerEntity player) {
+        return player.hasPermissionLevel(2);
+    }
+
+    // @Override // Old
+    // protected MapCodec<? extends BlockWithEntity> getCodec() {
+    //     return CODEC;
+    // }
 
 }

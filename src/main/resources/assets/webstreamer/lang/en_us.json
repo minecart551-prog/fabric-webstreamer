@@ -5,6 +5,7 @@
   "gui.webstreamer.display.height": "Height",
   "gui.webstreamer.display.offsetX": "Offset X",
   "gui.webstreamer.display.offsetY": "Offset Y",
+  "gui.webstreamer.display.offsetZ": "Offset Z",
   "gui.webstreamer.display.sourceType": "Source type",
   "gui.webstreamer.display.sourceType.raw": "Raw URL",
   "gui.webstreamer.display.sourceType.twitch": "Twitch",

@@ -5,6 +5,7 @@
   "gui.webstreamer.display.height": "Hauteur",
   "gui.webstreamer.display.offsetX": "Décalage X",
   "gui.webstreamer.display.offsetY": "Décalage Y",
+  "gui.webstreamer.display.offsetZ": "Décalage Z",
   "gui.webstreamer.display.sourceType": "Type de source",
   "gui.webstreamer.display.sourceType.raw": "URL brut",
   "gui.webstreamer.display.sourceType.twitch": "Twitch",

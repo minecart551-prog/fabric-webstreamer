@@ -7,7 +7,6 @@ import fr.theorozier.webstreamer.display.DisplayBlockEntity;
 import fr.theorozier.webstreamer.mixin.WorldRendererInvoker;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
-import net.minecraft.block.enums.BlockFace;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.font.TextRenderer.TextLayerType;
@@ -97,48 +96,49 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
 
         }
 
-        BlockFace attachment = entity.getCachedState().get(DisplayBlock.PROP_ATTACHMENT);
+        Direction attachment = entity.getCachedState().get(DisplayBlock.PROP_ATTACHMENT);
         Direction facing = entity.getCachedState().get(DisplayBlock.PROP_FACING);
 
         matrices.push();
 
         // Apply block position offset first
         switch (attachment) {
-            case WALL -> matrices.translate(0.5f - facing.getOffsetX(), 0.5f, 0.5f - facing.getOffsetZ());
-            case FLOOR -> matrices.translate(0.5f, -0.5f, 0.5f);
-            case CEILING -> matrices.translate(0.5f, 1.5f, 0.5f);
+            case NORTH, SOUTH, EAST, WEST -> matrices.translate(0.5f - facing.getOffsetX(), 0.5f, 0.5f - facing.getOffsetZ());
+            case UP -> matrices.translate(0.5f, -0.5f, 0.5f);
+            case DOWN -> matrices.translate(0.5f, 1.5f, 0.5f);
         }
 
         // Apply user-defined offset based on attachment orientation
         double offsetX = entity.getOffsetX();
         double offsetY = entity.getOffsetY();
+        double offsetZ = entity.getOffsetZ();
 
         switch (attachment) {
-            case WALL -> {
+            case NORTH, SOUTH, EAST, WEST -> {
                 // For wall-mounted displays, apply offset in world coordinates
                 switch (facing) {
-                    case NORTH -> matrices.translate(offsetX, offsetY, 0);
-                    case SOUTH -> matrices.translate(-offsetX, offsetY, 0);
-                    case EAST -> matrices.translate(0, offsetY, offsetX);
-                    case WEST -> matrices.translate(0, offsetY, -offsetX);
+                    case NORTH -> matrices.translate(offsetX, offsetY, -offsetZ);
+                    case SOUTH -> matrices.translate(-offsetX, offsetY, offsetZ);
+                    case EAST -> matrices.translate(offsetZ, offsetY, offsetX);
+                    case WEST -> matrices.translate(-offsetZ, offsetY, -offsetX);
                 }
             }
-            case FLOOR -> {
-                // For floor-mounted displays, X offset is horizontal, Y offset is in facing direction
+            case UP -> {
+                // For floor-mounted displays, X offset is horizontal, Y offset is in facing direction, Z is vertical
                 switch (facing) {
-                    case NORTH -> matrices.translate(offsetX, 0, -offsetY);
-                    case SOUTH -> matrices.translate(-offsetX, 0, offsetY);
-                    case EAST -> matrices.translate(offsetY, 0, offsetX);
-                    case WEST -> matrices.translate(-offsetY, 0, -offsetX);
+                    case NORTH -> matrices.translate(offsetX, offsetZ, -offsetY);
+                    case SOUTH -> matrices.translate(-offsetX, offsetZ, offsetY);
+                    case EAST -> matrices.translate(offsetY, offsetZ, offsetX);
+                    case WEST -> matrices.translate(-offsetY, offsetZ, -offsetX);
                 }
             }
-            case CEILING -> {
-                // For ceiling-mounted displays, X offset is horizontal, Y offset is in facing direction
+            case DOWN -> {
+                // For ceiling-mounted displays, X offset is horizontal, Y offset is in facing direction, Z is vertical
                 switch (facing) {
-                    case NORTH -> matrices.translate(offsetX, 0, offsetY);
-                    case SOUTH -> matrices.translate(-offsetX, 0, -offsetY);
-                    case EAST -> matrices.translate(-offsetY, 0, offsetX);
-                    case WEST -> matrices.translate(offsetY, 0, -offsetX);
+                    case NORTH -> matrices.translate(offsetX, -offsetZ, offsetY);
+                    case SOUTH -> matrices.translate(-offsetX, -offsetZ, -offsetY);
+                    case EAST -> matrices.translate(-offsetY, -offsetZ, offsetX);
+                    case WEST -> matrices.translate(offsetY, -offsetZ, -offsetX);
                 }
             }
         }
@@ -152,9 +152,9 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
         }
 
         switch (attachment) {
-            case WALL -> {}
-            case FLOOR -> matrices.multiply(ROTATE_FLOOR);
-            case CEILING -> matrices.multiply(ROTATE_CEILING);
+            case NORTH, SOUTH, EAST, WEST -> {}
+            case UP -> matrices.multiply(ROTATE_FLOOR);
+            case DOWN -> matrices.multiply(ROTATE_CEILING);
         }
 
         if (uri != null) {
