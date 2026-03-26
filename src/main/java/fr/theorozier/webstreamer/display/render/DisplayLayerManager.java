@@ -74,6 +74,15 @@ public class DisplayLayerManager extends DisplayLayerMap<URI> {
             }
         }
 
+        // Fallback for plain HTTP/HTTPS URLs with no recognised extension
+        // (e.g. YouTube progressive MP4 stream URLs from YoutubeClient).
+        // These are direct video files, not HLS playlists, so we use
+        // DisplayLayerVideo which feeds the URL straight into FrameGrabber.
+        String scheme = key.uri().getScheme();
+        if ("http".equals(scheme) || "https".equals(scheme)) {
+            return new DisplayLayerVideo(key.uri(), this.res);
+        }
+
         throw new UnknownFormatException();
 
     }

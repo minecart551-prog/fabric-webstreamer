@@ -69,7 +69,7 @@ public abstract class DisplaySource implements Cloneable {
         return switch (type) {
             case RawDisplaySource.TYPE -> new RawDisplaySource();
             case TwitchDisplaySource.TYPE -> new TwitchDisplaySource();
-            // By default, we create an empty display source.
+            case YoutubeDisplaySource.TYPE -> new YoutubeDisplaySource();
             default -> new RawDisplaySource();
         };
     }

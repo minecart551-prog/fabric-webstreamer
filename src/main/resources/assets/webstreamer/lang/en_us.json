@@ -24,5 +24,11 @@
   "gui.webstreamer.display.error.channelOffline": "Channel offline",
   "gui.webstreamer.display.status.noLayerAvailable": "No render layer available",
   "gui.webstreamer.display.status.unknownFormat": "URL format is not recognized",
-  "gui.webstreamer.display.status.noUrl": "No URL"
+  "gui.webstreamer.display.status.noUrl": "No URL",
+  "gui.webstreamer.display.sourceType.youtube": "YouTube",
+  "gui.webstreamer.display.videoId": "Video ID",
+  "gui.webstreamer.display.error.youtube": "YouTube error",
+  "gui.webstreamer.display.error.youtubeNotFound": "Video not found",
+  "gui.webstreamer.display.error.youtubeUnavailable": "Video unavailable",
+  "gui.webstreamer.display.error.youtubeNoStreams": "No playable streams found"
 }

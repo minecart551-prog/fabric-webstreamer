@@ -23,6 +23,9 @@ public class AudioStreamingBuffer {
 	/** Duration in microseconds. */
 	public final long duration;
 	
+	// Tracking for calculated timestamps when FFmpeg provides zero/invalid timestamps
+	private static long lastCalculatedTimestamp = 0;
+	
 	private AudioStreamingBuffer(int bufferId, long timestamp, long duration) {
 		this.bufferId = bufferId;
 		this.timestamp = timestamp;
@@ -54,15 +57,25 @@ public class AudioStreamingBuffer {
 		return fromRawData(tempBuffer, frame.samples[0], frame.audioChannels, frame.sampleRate, frame.timestamp);
 	}
 	
+	/**
+	 * Reset the timestamp tracker (called when starting a new video).
+	 */
+	public static void resetTimestampTracker() {
+		lastCalculatedTimestamp = 0;
+	}
+	
 	public static AudioStreamingBuffer fromRawData(ShortBuffer tempBuffer, Buffer rawBuffer, int channels, int frequency, long timestamp) {
-		
+
 		if (channels != 1 && channels != 2) {
 			throw new IllegalArgumentException("illegal channels count, only 1 or 2 are allowed");
 		}
+
+		// Clear the buffer to reset position for this frame
+		tempBuffer.clear();
 		
 		boolean stereo = (channels == 2);
 		int samples;
-		
+
 		if (rawBuffer instanceof ByteBuffer sampleByte) {
 			int count = sampleByte.remaining();
 			if (stereo) {
@@ -98,15 +111,24 @@ public class AudioStreamingBuffer {
 		} else {
 			throw new IllegalArgumentException("unsupported sample format");
 		}
-		
+
 		int bufferId = alGenBuffers();
 		alBufferData(bufferId, AL_FORMAT_MONO16, tempBuffer, frequency);
-		
+
 		AudioStreamingSource.checkErrors("audio buffer data");
-		
+
 		long duration = samples * 1000000L / frequency;
-		return new AudioStreamingBuffer(bufferId, timestamp, duration);
-		
+
+		// Handle zero or invalid timestamps by calculating from accumulated samples
+		long finalTimestamp = timestamp;
+		if (timestamp <= lastCalculatedTimestamp || timestamp < 0) {
+			// Use calculated timestamp based on previous frame + duration
+			finalTimestamp = lastCalculatedTimestamp + duration;
+		}
+
+		lastCalculatedTimestamp = finalTimestamp;
+		return new AudioStreamingBuffer(bufferId, finalTimestamp, duration);
+
 	}
-	
+
 }

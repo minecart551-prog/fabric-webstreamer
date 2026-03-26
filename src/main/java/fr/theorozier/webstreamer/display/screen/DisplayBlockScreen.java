@@ -6,9 +6,11 @@ import fr.theorozier.webstreamer.display.DisplayNetworking;
 import fr.theorozier.webstreamer.display.source.DisplaySource;
 import fr.theorozier.webstreamer.display.source.RawDisplaySource;
 import fr.theorozier.webstreamer.display.source.TwitchDisplaySource;
+import fr.theorozier.webstreamer.display.source.YoutubeDisplaySource;
 import fr.theorozier.webstreamer.playlist.Playlist;
 import fr.theorozier.webstreamer.playlist.PlaylistQuality;
 import fr.theorozier.webstreamer.twitch.TwitchClient;
+import fr.theorozier.webstreamer.youtube.YoutubeClient;
 import fr.theorozier.webstreamer.util.AsyncProcessor;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
@@ -24,7 +26,7 @@ import java.util.List;
 import java.net.URI;
 
 /**
- * <p>This screen is the GUI that the player can use to configure a display block 
+ * <p>This screen is the GUI that the player can use to configure a display block
  * entity.</p>
  */
 @Environment(EnvType.CLIENT)
@@ -39,8 +41,10 @@ public class DisplayBlockScreen extends Screen {
     private static final Text SOURCE_TYPE_TEXT = Text.translatable("gui.webstreamer.display.sourceType");
     private static final Text SOURCE_TYPE_RAW_TEXT = Text.translatable("gui.webstreamer.display.sourceType.raw");
     private static final Text SOURCE_TYPE_TWITCH_TEXT = Text.translatable("gui.webstreamer.display.sourceType.twitch");
+    private static final Text SOURCE_TYPE_YOUTUBE_TEXT = Text.translatable("gui.webstreamer.display.sourceType.youtube");
     private static final Text URL_TEXT = Text.translatable("gui.webstreamer.display.url");
     private static final Text CHANNEL_TEXT = Text.translatable("gui.webstreamer.display.channel");
+    private static final Text VIDEO_ID_TEXT = Text.translatable("gui.webstreamer.display.videoId");
     private static final Text NO_QUALITY_TEXT = Text.translatable("gui.webstreamer.display.noQuality");
     private static final Text QUALITY_TEXT = Text.translatable("gui.webstreamer.display.quality");
     private static final String AUDIO_DISTANCE_TEXT_KEY = "gui.webstreamer.display.audioDistance";
@@ -53,9 +57,14 @@ public class DisplayBlockScreen extends Screen {
     private static final Text ERR_NO_TOKEN_TEXT = Text.translatable("gui.webstreamer.display.error.noToken");
     private static final Text ERR_CHANNEL_NOT_FOUND_TEXT = Text.translatable("gui.webstreamer.display.error.channelNotFound");
     private static final Text ERR_CHANNEL_OFFLINE_TEXT = Text.translatable("gui.webstreamer.display.error.channelOffline");
+    private static final Text ERR_YOUTUBE = Text.translatable("gui.webstreamer.display.error.youtube");
+    private static final Text ERR_YOUTUBE_NOT_FOUND_TEXT = Text.translatable("gui.webstreamer.display.error.youtubeNotFound");
+    private static final Text ERR_YOUTUBE_UNAVAILABLE_TEXT = Text.translatable("gui.webstreamer.display.error.youtubeUnavailable");
+    private static final Text ERR_YOUTUBE_NO_STREAMS_TEXT = Text.translatable("gui.webstreamer.display.error.youtubeNoStreams");
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final AsyncProcessor<String, Playlist, TwitchClient.PlaylistException> asyncPlaylist = new AsyncProcessor<>(WebStreamerClientMod.TWITCH_CLIENT::requestPlaylist, false);
+    private final AsyncProcessor<String, Playlist, YoutubeClient.YoutubeException> asyncYoutubePlaylist = new AsyncProcessor<>(WebStreamerClientMod.YOUTUBE_CLIENT::requestPlaylist, false);
 
     /** The block entity this screen is opened on. The following fields are temporaries to save later. */
     private final DisplayBlockEntity display;
@@ -73,6 +82,12 @@ public class DisplayBlockScreen extends Screen {
     private TextWidget twitchQualityText;
     private Playlist twitchPlaylist;
     private TwitchClient.PlaylistException twitchPlaylistExc;
+
+    private TextFieldWidget youtubeVideoIdField;
+    private QualitySliderWidget youtubeQualitySlider;
+    private TextWidget youtubeQualityText;
+    private Playlist youtubePlaylist;
+    private YoutubeClient.YoutubeException youtubePlaylistExc;
 
     private boolean dirty;
     private ButtonWidget doneButton;
@@ -165,6 +180,8 @@ public class DisplayBlockScreen extends Screen {
             sourceType = sourceTypeButton.getValue();
         } else if (source instanceof TwitchDisplaySource) {
             sourceType = SourceType.TWITCH;
+        } else if (source instanceof YoutubeDisplaySource) {
+            sourceType = SourceType.YOUTUBE;
         }
 
         sourceTypeButton = CyclingButtonWidget.builder(SourceType::getText)
@@ -254,6 +271,45 @@ public class DisplayBlockScreen extends Screen {
 
             ySourceBottom += 50 + 40;
 
+        } else if (sourceType == SourceType.YOUTUBE) {
+
+            TextWidget videoIdText = new TextWidget(VIDEO_ID_TEXT, this.textRenderer);
+            videoIdText.setPosition(xHalf - 154, ySourceTop);
+            videoIdText.setTextColor(0xA0A0A0);
+            videoIdText.alignLeft();
+            this.addDrawableChild(videoIdText);
+
+            String youtubeVideoIdVal = "";
+            if (youtubeVideoIdField != null) {
+                youtubeVideoIdVal = youtubeVideoIdField.getText();
+            } else if (source instanceof YoutubeDisplaySource youtubeSource) {
+                youtubeVideoIdVal = youtubeSource.getVideoId();
+                this.asyncYoutubePlaylist.push(youtubeVideoIdVal);
+            } else {
+                this.asyncYoutubePlaylist.push("");
+            }
+
+            youtubeVideoIdField = new TextFieldWidget(this.textRenderer, xHalf - 154, ySourceTop + 10, 308, 20, Text.empty());
+            youtubeVideoIdField.setMaxLength(16);
+            youtubeVideoIdField.setText(youtubeVideoIdVal);
+            youtubeVideoIdField.setChangedListener(val -> {
+                this.asyncYoutubePlaylist.push(val);
+                this.dirty = true;
+            });
+            this.addDrawableChild(this.youtubeVideoIdField);
+
+            youtubeQualityText = new TextWidget(QUALITY_TEXT, this.textRenderer);
+            youtubeQualityText.setPosition(xHalf - 154, ySourceTop + 40);
+            youtubeQualityText.setTextColor(0xA0A0A0);
+            youtubeQualityText.alignLeft();
+            this.addDrawableChild(youtubeQualityText);
+
+            youtubeQualitySlider = new QualitySliderWidget(xHalf - 154, ySourceTop + 50, 308, 20, youtubeQualitySlider);
+            youtubeQualitySlider.setChangedListener(val -> this.dirty = true);
+            this.addDrawableChild(youtubeQualitySlider);
+
+            ySourceBottom += 50 + 40;
+
         }
 
         errorText = new TextWidget(this.width, 0, Text.empty(), this.textRenderer);
@@ -288,7 +344,7 @@ public class DisplayBlockScreen extends Screen {
     }
 
     /**
-     * Show that the current configuration contains an error and the "done" button cannot be presed.
+     * Show that the current configuration contains an error and the "done" button cannot be pressed.
      * @param message The message for the error.
      */
     private void showError(Text message) {
@@ -327,6 +383,8 @@ public class DisplayBlockScreen extends Screen {
         URI rawUri = null;
         String twitchChannel = null;
         String twitchQuality = null;
+        String youtubeVideoId = null;
+        String youtubeQuality = null;
 
         SourceType sourceType = this.sourceTypeButton.getValue();
 
@@ -371,6 +429,35 @@ public class DisplayBlockScreen extends Screen {
             twitchChannel = this.twitchPlaylist.getChannel();
             twitchQuality = twitchQualityRaw.name();
 
+        } else if (sourceType == SourceType.YOUTUBE) {
+
+            if (this.asyncYoutubePlaylist.requested() || !this.asyncYoutubePlaylist.idle()) {
+                this.showError(ERR_PENDING);
+                return false;
+            } else if (this.youtubePlaylistExc != null) {
+                this.showError(switch (this.youtubePlaylistExc.getExceptionType()) {
+                    case FETCH_FAILED, PARSE_FAILED -> ERR_YOUTUBE;
+                    case INVALID_VIDEO_ID, VIDEO_NOT_FOUND -> ERR_YOUTUBE_NOT_FOUND_TEXT;
+                    case VIDEO_UNAVAILABLE -> ERR_YOUTUBE_UNAVAILABLE_TEXT;
+                    case NO_STREAMS -> ERR_YOUTUBE_NO_STREAMS_TEXT;
+                });
+                return false;
+            } else if (this.youtubePlaylist == null) {
+                this.showError(Text.empty());
+                return false;
+            }
+
+            this.youtubeQualitySlider.visible = true;
+            this.youtubeQualityText.visible = true;
+
+            PlaylistQuality youtubeQualityRaw = this.youtubeQualitySlider.getQuality();
+            if (youtubeQualityRaw == null) {
+                throw new IllegalStateException("youtube quality should be present if playlist is present");
+            }
+
+            youtubeVideoId = this.youtubePlaylist.getChannel(); // getChannel() returns the video ID for YouTube
+            youtubeQuality = youtubeQualityRaw.name();
+
         }
 
         this.showValid();
@@ -388,6 +475,8 @@ public class DisplayBlockScreen extends Screen {
                 this.display.setSource(new RawDisplaySource(rawUri));
             } else if (sourceType == SourceType.TWITCH) {
                 this.display.setSource(new TwitchDisplaySource(twitchChannel, twitchQuality));
+            } else if (sourceType == SourceType.YOUTUBE) {
+                this.display.setSource(new YoutubeDisplaySource(youtubeVideoId, youtubeQuality));
             }
 
             DisplayNetworking.sendDisplayUpdate(this.display);
@@ -439,8 +528,26 @@ public class DisplayBlockScreen extends Screen {
                 this.twitchQualitySlider.setQualities(null);
                 this.dirty = true;
             });
+        } else if (sourceType == SourceType.YOUTUBE) {
+            this.asyncYoutubePlaylist.fetch(this.executor, pl -> {
+                boolean wasSet = this.youtubeQualitySlider.getQuality() != null;
+                this.youtubePlaylist = pl;
+                this.youtubePlaylistExc = null;
+                this.youtubeQualitySlider.setQualities(pl.getQualities());
+                // If the slider was new and the current source is a youtube one, set its quality.
+                if (!wasSet && this.display.getSource() instanceof YoutubeDisplaySource youtubeSource) {
+                    this.youtubeQualitySlider.setQuality(youtubeSource.getQuality());
+                }
+                this.dirty = true;
+            }, exc -> {
+                this.youtubePlaylist = null;
+                this.youtubePlaylistExc = exc;
+                this.youtubeQualitySlider.setQualities(null);
+                this.dirty = true;
+            });
         } else {
             this.asyncPlaylist.fetch(this.executor, pl -> {}, exc -> {});
+            this.asyncYoutubePlaylist.fetch(this.executor, pl -> {}, exc -> {});
         }
 
         if (this.dirty) {
@@ -456,7 +563,8 @@ public class DisplayBlockScreen extends Screen {
     private enum SourceType {
 
         RAW(SOURCE_TYPE_RAW_TEXT),
-        TWITCH(SOURCE_TYPE_TWITCH_TEXT);
+        TWITCH(SOURCE_TYPE_TWITCH_TEXT),
+        YOUTUBE(SOURCE_TYPE_YOUTUBE_TEXT);
 
         private final Text text;
         SourceType(Text text) {

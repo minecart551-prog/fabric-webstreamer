@@ -167,6 +167,7 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
                     // a URL reset for the render data. With twitch sources it should reset
                     // and re-fetch a new URL for the playlist.
                     entity.resetSourceUri();
+                    matrices.pop();
                     return;
                 }
 

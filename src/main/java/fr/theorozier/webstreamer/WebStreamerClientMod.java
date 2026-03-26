@@ -12,12 +12,14 @@ import net.minecraft.client.render.block.entity.BlockEntityRendererFactories;
 import net.minecraft.client.render.RenderLayer;
 import org.bytedeco.ffmpeg.global.avutil;
 import org.bytedeco.javacv.FFmpegLogCallback;
+import fr.theorozier.webstreamer.youtube.YoutubeClient;
 
 @Environment(EnvType.CLIENT)
 public class WebStreamerClientMod implements ClientModInitializer {
 
     public static DisplayLayerManager DISPLAY_LAYERS;
     public static TwitchClient TWITCH_CLIENT;
+    public static YoutubeClient YOUTUBE_CLIENT;
 
     @Override
     public void onInitializeClient() {
@@ -28,7 +30,7 @@ public class WebStreamerClientMod implements ClientModInitializer {
     
         DISPLAY_LAYERS = new DisplayLayerManager();
         TWITCH_CLIENT = new TwitchClient();
-        
+        YOUTUBE_CLIENT = new YoutubeClient();
         FFmpegLogCallback.setLevel(avutil.AV_LOG_QUIET);
     
     }
