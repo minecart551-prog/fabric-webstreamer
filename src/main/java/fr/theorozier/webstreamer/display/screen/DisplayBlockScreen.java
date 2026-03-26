@@ -290,7 +290,7 @@ public class DisplayBlockScreen extends Screen {
             }
 
             youtubeVideoIdField = new TextFieldWidget(this.textRenderer, xHalf - 154, ySourceTop + 10, 308, 20, Text.empty());
-            youtubeVideoIdField.setMaxLength(16);
+            youtubeVideoIdField.setMaxLength(256);
             youtubeVideoIdField.setText(youtubeVideoIdVal);
             youtubeVideoIdField.setChangedListener(val -> {
                 this.asyncYoutubePlaylist.push(val);

@@ -26,7 +26,7 @@
   "gui.webstreamer.display.status.unknownFormat": "URL format is not recognized",
   "gui.webstreamer.display.status.noUrl": "No URL",
   "gui.webstreamer.display.sourceType.youtube": "YouTube",
-  "gui.webstreamer.display.videoId": "Video ID",
+  "gui.webstreamer.display.videoId": "YouTube URL or Video ID",
   "gui.webstreamer.display.error.youtube": "YouTube error",
   "gui.webstreamer.display.error.youtubeNotFound": "Video not found",
   "gui.webstreamer.display.error.youtubeUnavailable": "Video unavailable",

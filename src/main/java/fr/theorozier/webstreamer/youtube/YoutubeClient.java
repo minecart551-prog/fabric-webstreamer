@@ -100,14 +100,18 @@ public class YoutubeClient {
     // -------------------------------------------------------------------------
 
     /**
-     * Return the playlist of stream qualities for a given video ID.
+     * Return the playlist of stream qualities for a given video ID or YouTube URL.
      * Results are cached until {@link #forgetPlaylist} is called.
      *
-     * @param videoId 11-character YouTube video ID (e.g. {@code dQw4w9WgXcQ}).
+     * @param videoIdOrUrl Either a 11-character YouTube video ID (e.g. {@code dQw4w9WgXcQ})
+     *                     or a full YouTube URL (e.g. {@code https://www.youtube.com/watch?v=dQw4w9WgXcQ}).
      * @return Non-empty {@link Playlist} of available qualities.
      * @throws YoutubeException If the video cannot be fetched or has no streams.
      */
-    public Playlist requestPlaylist(String videoId) throws YoutubeException {
+    public Playlist requestPlaylist(String videoIdOrUrl) throws YoutubeException {
+        // Extract video ID from URL if necessary
+        String videoId = extractVideoId(videoIdOrUrl);
+        
         synchronized (this.cache) {
             Playlist cached = this.cache.get(videoId);
             if (cached != null) {
@@ -126,10 +130,56 @@ public class YoutubeClient {
     }
 
     /** Remove a cached playlist so it is re-fetched on the next call. */
-    public void forgetPlaylist(String videoId) {
+    public void forgetPlaylist(String videoIdOrUrl) {
+        String videoId = extractVideoId(videoIdOrUrl);
         synchronized (this.cache) {
             this.cache.remove(videoId);
         }
+    }
+
+    /**
+     * Extract video ID from a YouTube URL or return the input if it's already a video ID.
+     * Supports formats:
+     * - https://www.youtube.com/watch?v=VIDEO_ID
+     * - https://youtu.be/VIDEO_ID
+     * - or just VIDEO_ID directly
+     */
+    private static String extractVideoId(String videoIdOrUrl) {
+        if (videoIdOrUrl == null || videoIdOrUrl.isBlank()) {
+            return videoIdOrUrl;
+        }
+
+        // Check if it's a URL
+        if (videoIdOrUrl.contains("youtube.com") || videoIdOrUrl.contains("youtu.be")) {
+            try {
+                java.net.URL url = new java.net.URL(videoIdOrUrl);
+                String host = url.getHost();
+                String query = url.getQuery();
+                
+                if (host.contains("youtube.com")) {
+                    // Format: https://www.youtube.com/watch?v=VIDEO_ID
+                    if (query != null && query.contains("v=")) {
+                        String[] parts = query.split("&");
+                        for (String part : parts) {
+                            if (part.startsWith("v=")) {
+                                return part.substring(2);
+                            }
+                        }
+                    }
+                } else if (host.contains("youtu.be")) {
+                    // Format: https://youtu.be/VIDEO_ID
+                    String path = url.getPath();
+                    if (path.length() > 1) {
+                        return path.substring(1);
+                    }
+                }
+            } catch (java.net.MalformedURLException e) {
+                // Fall through to return original string
+            }
+        }
+
+        // Return as-is if it's already a video ID or couldn't parse
+        return videoIdOrUrl;
     }
 
     // -------------------------------------------------------------------------
@@ -214,12 +264,6 @@ public class YoutubeClient {
         collectFormats(streamingData, "formats",         formats);
         collectFormats(streamingData, "adaptiveFormats", formats);
 
-        WebStreamerMod.LOGGER.info("YouTube [{}] collected {} total formats", videoId, formats.size());
-        for (StreamFormat fmt : formats) {
-            WebStreamerMod.LOGGER.info("  Format: itag={}, height={}p, video={}, audio={}", 
-                fmt.itag, fmt.height, fmt.hasVideo, fmt.hasAudio);
-        }
-
         // Keep only formats that have a plain URL and video.
         // Accept formats with both video+audio, or formats that are known progressive itags.
         List<StreamFormat> usable = formats.stream()
@@ -227,8 +271,6 @@ public class YoutubeClient {
                 .filter(f -> f.hasVideo && (f.hasAudio || KNOWN_ITAGS.containsKey(f.itag)))
                 .sorted(Comparator.comparingInt((StreamFormat f) -> f.height).reversed())
                 .toList();
-
-        WebStreamerMod.LOGGER.info("YouTube [{}] filtered to {} usable formats", videoId, usable.size());
 
         if (usable.isEmpty()) {
             WebStreamerMod.LOGGER.warn("No usable progressive streams from Android API for {}", videoId);
