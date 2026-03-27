@@ -1,0 +1,8 @@
+{
+  "variants": {
+    "facing=north": {"model": "webstreamer:block/tv_box", "y": 0},
+    "facing=south": {"model": "webstreamer:block/tv_box", "y": 180},
+    "facing=west": {"model": "webstreamer:block/tv_box", "y": -90},
+    "facing=east": {"model": "webstreamer:block/tv_box", "y": -270}
+  }
+}

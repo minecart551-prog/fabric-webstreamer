@@ -32,9 +32,14 @@ public class DisplayBlockEntity extends BlockEntity {
     private double offsetX = 0.0;
     private double offsetY = 0.0;
     private double offsetZ = 0.0;
+    private boolean requiresOp = false;
+
+    protected DisplayBlockEntity(net.minecraft.block.entity.BlockEntityType<? extends DisplayBlockEntity> type, BlockPos pos, BlockState state) {
+        super(type, pos, state);
+    }
 
     public DisplayBlockEntity(BlockPos pos, BlockState state) {
-        super(WebStreamerMod.DISPLAY_BLOCK_ENTITY, pos, state);
+        this(WebStreamerMod.DISPLAY_BLOCK_ENTITY, pos, state);
     }
 
     public void setSource(@NotNull DisplaySource source) {
@@ -106,6 +111,15 @@ public class DisplayBlockEntity extends BlockEntity {
         return offsetZ;
     }
 
+    public boolean requiresOp() {
+        return requiresOp;
+    }
+
+    public void setRequiresOp(boolean requiresOp) {
+        this.requiresOp = requiresOp;
+        this.markDirty();
+    }
+
     @Override
     protected void writeNbt(NbtCompound nbt) {
 
@@ -121,6 +135,7 @@ public class DisplayBlockEntity extends BlockEntity {
         displayNbt.putDouble("offsetX", this.offsetX);
         displayNbt.putDouble("offsetY", this.offsetY);
         displayNbt.putDouble("offsetZ", this.offsetZ);
+        displayNbt.putBoolean("requiresOp", this.requiresOp);
 
         if (this.source != null) {
             displayNbt.putString("type", this.source.getType());
@@ -178,6 +193,12 @@ public class DisplayBlockEntity extends BlockEntity {
                 this.offsetZ = offsetZ.doubleValue();
             } else {
                 this.offsetZ = 0.0;
+            }
+
+            if (displayNbt.get("requiresOp") instanceof net.minecraft.nbt.NbtByte requiresOp) {
+                this.requiresOp = requiresOp.byteValue() != 0;
+            } else {
+                this.requiresOp = false;
             }
 
             if (displayNbt.get("type") instanceof NbtString type) {

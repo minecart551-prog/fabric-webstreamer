@@ -285,8 +285,6 @@ public class YoutubeClient {
             if (seenLabels.add(label)) {
                 try {
                     playlist.addQuality(new PlaylistQuality(label, new URI(fmt.url)));
-                    WebStreamerMod.LOGGER.info("YouTube [{}] stream: {} (itag {})",
-                            videoId, label, fmt.itag);
                 } catch (URISyntaxException e) {
                     WebStreamerMod.LOGGER.warn("Skipping malformed URL for itag {}", fmt.itag);
                 }

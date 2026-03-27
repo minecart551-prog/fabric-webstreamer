@@ -1,0 +1,17 @@
+{
+    "variants": {
+        "facing=north,frame=true": {"model": "webstreamer:block/frame","y": 0},
+        "facing=south,frame=true": { "model": "webstreamer:block/frame", "y": 180},
+        "facing=west,frame=true": {"model": "webstreamer:block/frame", "y": -90},
+        "facing=east,frame=true": {"model": "webstreamer:block/frame", "y": -270},
+        "facing=up,frame=true": {"model": "webstreamer:block/frame","x": -90 },
+        "facing=down,frame=true": {"model": "webstreamer:block/frame", "x": 90 },
+
+        "facing=north,frame=false": {"model": "webstreamer:block/frame", "y": 0},
+        "facing=south,frame=false": { "model": "webstreamer:block/frame", "y": 180},
+        "facing=west,frame=false": {"model": "webstreamer:block/frame", "y": -90},
+        "facing=east,frame=false": {"model": "webstreamer:block/frame", "y": -270},
+        "facing=up,frame=false": {"model": "webstreamer:block/frame","x": -90 },
+        "facing=down,frame=false": {"model": "webstreamer:block/frame", "x": 90 }
+    }
+}

@@ -20,6 +20,7 @@ import net.minecraft.util.shape.VoxelShape;
 import net.minecraft.util.shape.VoxelShapes;
 import net.minecraft.world.BlockView;
 import net.minecraft.world.World;
+import net.minecraft.block.ShapeContext;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -34,12 +35,12 @@ public class DisplayBlock extends BlockWithEntity {
     // public static final EnumProperty<BlockFace> PROP_ATTACHMENT = EnumProperty.of("attachment", BlockFace.class, BlockFace.WALL, BlockFace.FLOOR, BlockFace.CEILING); // Old
     public static final EnumProperty<Direction> PROP_ATTACHMENT = EnumProperty.of("attachment", Direction.class, Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST, Direction.UP, Direction.DOWN);
 
-    private static final VoxelShape SHAPE_NORTH = VoxelShapes.cuboid(0, 0, 0.9, 1, 1, 1);
-    private static final VoxelShape SHAPE_SOUTH = VoxelShapes.cuboid(0, 0, 0, 1, 1, 0.1);
-    private static final VoxelShape SHAPE_WEST = VoxelShapes.cuboid(0.9, 0, 0, 1, 1, 1);
-    private static final VoxelShape SHAPE_EAST = VoxelShapes.cuboid(0, 0, 0, 0.1, 1, 1);
-    private static final VoxelShape SHAPE_FLOOR = VoxelShapes.cuboid(0, 0, 0, 1, 0.1, 1);
-    private static final VoxelShape SHAPE_CEILING = VoxelShapes.cuboid(0, 0.9, 0, 1, 1.0, 1);
+    protected static final VoxelShape SHAPE_NORTH = VoxelShapes.cuboid(0, 0, 0.9, 1, 1, 1);
+    protected static final VoxelShape SHAPE_SOUTH = VoxelShapes.cuboid(0, 0, 0, 1, 1, 0.1);
+    protected static final VoxelShape SHAPE_WEST = VoxelShapes.cuboid(0.9, 0, 0, 1, 1, 1);
+    protected static final VoxelShape SHAPE_EAST = VoxelShapes.cuboid(0, 0, 0, 0.1, 1, 1);
+    protected static final VoxelShape SHAPE_FLOOR = VoxelShapes.cuboid(0, 0, 0, 1, 0.1, 1);
+    protected static final VoxelShape SHAPE_CEILING = VoxelShapes.cuboid(0, 0.9, 0, 1, 1.0, 1);
 
     public DisplayBlock(Settings settings) {
         super(settings);
@@ -68,7 +69,8 @@ public class DisplayBlock extends BlockWithEntity {
 
     @Override
     public BlockRenderType getRenderType(BlockState state) {
-        return BlockRenderType.ENTITYBLOCK_ANIMATED;
+        // Use MODEL so block state model is rendered (TV frame/stand) and block entity overlay draws video on top.
+        return BlockRenderType.MODEL;
     }
 
     @Nullable
@@ -104,23 +106,131 @@ public class DisplayBlock extends BlockWithEntity {
 
     @Override
     public VoxelShape getOutlineShape(BlockState state, BlockView world, BlockPos pos, ShapeContext context) {
+        if (world.getBlockEntity(pos) instanceof DisplayBlockEntity displayEntity) {
+            // TV/BigTV and customized display blocks have dynamic width/height and offset.
+            if (displayEntity.getWidth() != 1.0f || displayEntity.getHeight() != 1.0f || state.getBlock() instanceof TVBlock) {
+                return createDynamicOutlineShape(state, displayEntity);
+            }
+        }
+
         return switch (state.get(PROP_ATTACHMENT)) {
             case NORTH, SOUTH, EAST, WEST -> switch (state.get(PROP_FACING)) {
                 case NORTH -> SHAPE_NORTH;
                 case SOUTH -> SHAPE_SOUTH;
                 case EAST -> SHAPE_EAST;
                 case WEST -> SHAPE_WEST;
-                default -> null;
+                default -> VoxelShapes.fullCube();
             };
             case DOWN -> SHAPE_FLOOR;
             case UP -> SHAPE_CEILING;
         };
     }
 
+    protected VoxelShape createDynamicOutlineShape(BlockState state, DisplayBlockEntity displayEntity) {
+        float width = displayEntity.getWidth();
+        float height = displayEntity.getHeight();
+        double offsetX = displayEntity.getOffsetX();
+        double offsetY = displayEntity.getOffsetY();
+        double offsetZ = displayEntity.getOffsetZ();
+
+        float halfW = width / 2.0f;
+        float halfH = height / 2.0f;
+        double thickness = 0.1;
+
+        Direction attachment = state.get(PROP_ATTACHMENT);
+        Direction facing = state.get(PROP_FACING);
+
+        double minX, maxX, minY, maxY, minZ, maxZ;
+        minY = 0.5 - halfH + offsetY;
+        maxY = 0.5 + halfH + offsetY;
+
+        if (attachment == Direction.UP || attachment == Direction.DOWN) {
+            // Keep TV as vertical surface even when attached to floor/ceiling.
+            // Use wall-like shape centered in block for interaction consistency.
+            switch (facing) {
+                case NORTH -> {
+                    minX = 0.5 - halfW + offsetX;
+                    maxX = 0.5 + halfW + offsetX;
+                    minZ = -offsetZ;
+                    maxZ = thickness - offsetZ;
+                }
+                case SOUTH -> {
+                    minX = 0.5 - halfW - offsetX;
+                    maxX = 0.5 + halfW - offsetX;
+                    minZ = 1 - thickness + offsetZ;
+                    maxZ = 1 + offsetZ;
+                }
+                case EAST -> {
+                    minX = 1 - thickness + offsetZ;
+                    maxX = 1 + offsetZ;
+                    minZ = 0.5 - halfW + offsetX;
+                    maxZ = 0.5 + halfW + offsetX;
+                }
+                case WEST -> {
+                    minX = -offsetZ;
+                    maxX = thickness - offsetZ;
+                    minZ = 0.5 - halfW - offsetX;
+                    maxZ = 0.5 + halfW - offsetX;
+                }
+                default -> {
+                    minX = 0.5 - halfW;
+                    maxX = 0.5 + halfW;
+                    minZ = 0.0;
+                    maxZ = 0.0 + thickness;
+                }
+            }
+        } else {
+            // Wall-mounted shape
+            switch (facing) {
+                case NORTH -> {
+                    minX = 0.5 - halfW + offsetX;
+                    maxX = 0.5 + halfW + offsetX;
+                    minZ = -offsetZ;
+                    maxZ = thickness - offsetZ;
+                }
+                case SOUTH -> {
+                    minX = 0.5 - halfW - offsetX;
+                    maxX = 0.5 + halfW - offsetX;
+                    minZ = 1 - thickness + offsetZ;
+                    maxZ = 1 + offsetZ;
+                }
+                case EAST -> {
+                    minX = 1 - thickness + offsetZ;
+                    maxX = 1 + offsetZ;
+                    minZ = 0.5 - halfW + offsetX;
+                    maxZ = 0.5 + halfW + offsetX;
+                }
+                case WEST -> {
+                    minX = -offsetZ;
+                    maxX = thickness - offsetZ;
+                    minZ = 0.5 - halfW - offsetX;
+                    maxZ = 0.5 + halfW - offsetX;
+                }
+                default -> {
+                    minX = 0.5 - halfW;
+                    maxX = 0.5 + halfW;
+                    minZ = 0.0;
+                    maxZ = 0.0 + thickness;
+                }
+            }
+        }
+
+        return VoxelShapes.cuboid(minX, minY, minZ, maxX, maxY, maxZ);
+    }
+
+    @Override
+    public VoxelShape getCollisionShape(BlockState state, BlockView world, BlockPos pos, ShapeContext context) {
+        return getOutlineShape(state, world, pos, context);
+    }
+
     @Override
     public ActionResult onUse(BlockState state, World world, BlockPos pos, PlayerEntity player, Hand hand, BlockHitResult hit) {
         BlockEntity be = world.getBlockEntity(pos);
-        if (canUse(player) && be instanceof DisplayBlockEntity dbe) {
+        if (be instanceof DisplayBlockEntity dbe) {
+            // If locked to creative and player is not creative, deny access
+            if (dbe.requiresOp() && !player.isCreative()) {
+                return ActionResult.PASS;
+            }
             if (player instanceof DisplayBlockInteract interact) {
                 interact.openDisplayBlockScreen(dbe);
                 return ActionResult.success(world.isClient);

@@ -1,5 +1,8 @@
 {
+  "itemGroup.webstreamer.tab": "WebStreamer",
   "block.webstreamer.display": "Web Display",
+  "block.webstreamer.tv": "TV",
+  "block.webstreamer.big_tv": "Big TV",
   "gui.webstreamer.display.conf": "Display configuration",
   "gui.webstreamer.display.width": "Width",
   "gui.webstreamer.display.height": "Height",

@@ -52,18 +52,17 @@ public class DisplayRenderData {
 		
 		if (this.sourceDirty) {
 			this.uri = null;
-			this.futureUri = executor.submit(() -> this.display.getSource().getUri());
+			this.futureUri = executor.submit(() -> {
+				DisplaySource src = this.display.getSource();
+				URI result = src.getUri();
+				return result;
+			});
 			this.sourceDirty = false;
 		}
 		
 		if (this.futureUri != null && this.futureUri.isDone()) {
 			try {
 				this.uri = this.futureUri.get();
-				if (this.uri == null) {
-					WebStreamerMod.LOGGER.info(this.display.makeLog("Caching no display URI."));
-				} else {
-					WebStreamerMod.LOGGER.info(this.display.makeLog("Caching display URI: {}"), this.uri);
-				}
 			} catch (InterruptedException | CancellationException e) {
 				// Cancel should not happen.
 			} catch (ExecutionException e) {

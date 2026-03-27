@@ -131,12 +131,12 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         Path tmp = null;
         ShortBuffer audioBuf = this.res.allocAudioBuffer();
         try {
+
             // Reset audio timestamp tracker for new video
             AudioStreamingBuffer.resetTimestampTracker();
             
             // 1. Download to a temp file using Java's HttpClient.
             tmp = Files.createTempFile("webstreamer_yt_", ".mp4");
-            WebStreamerMod.LOGGER.info(makeLog("Downloading video to: {}"), tmp);
 
             HttpRequest req = HttpRequest.newBuilder(this.uri)
                     .GET()
@@ -290,7 +290,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             }
 
             if (frame == null) {
-                WebStreamerMod.LOGGER.info(makeLog("Video stream ended, freeing layer."));
                 this.stopGrabber();
                 this.grabberFailed = true;
             }

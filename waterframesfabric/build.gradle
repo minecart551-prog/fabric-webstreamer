@@ -1,0 +1,122 @@
+plugins {
+    id 'java'
+    id 'idea'
+    id 'fabric-loom' version '1.9-SNAPSHOT'
+    id "me.modmuss50.mod-publish-plugin" version "0.8.3"
+}
+
+def MT_TOKEN = System.getenv("MODRINTH_TOKEN")
+def CF_TOKEN = System.getenv("CURSEFORGE_TOKEN")
+
+base {
+    archivesName = modid
+    version = "$modloader-mc$mcversion-v$modversion"
+}
+
+java.toolchain {
+    languageVersion = JavaLanguageVersion.of(17)
+}
+
+println "Java: ${System.getProperty 'java.version'}, Gradle Java: ${JavaVersion.current()}, JVM: ${System.getProperty 'java.vm.version'} (${System.getProperty 'java.vendor'}), Arch: ${System.getProperty 'os.arch'}"
+loom {
+    mixin {
+        defaultRefmapName = "${modid}.${mixin_refmap_suffix}"
+    }
+
+    accessWidenerPath = file("src/main/resources/${modid}.accesswidener")
+
+    mods {
+        "${modid}" {
+            sourceSet sourceSets.main
+        }
+    }
+
+}
+sourceSets.main.resources { srcDir 'src/generated/resources' }
+
+repositories {
+    maven { url 'https://maven.minecraftforge.net/' }
+    maven { url 'https://repo.spongepowered.org/maven' }
+    maven { url 'https://jitpack.io' }
+    maven { url 'https://maven.parchmentmc.org' }
+    maven { url 'https://www.cursemaven.com'
+        content {includeGroup 'curse.maven' }
+    }
+}
+
+dependencies {
+    // To change the versions see the gradle.properties file
+    minecraft "com.mojang:minecraft:$mcversion"
+    mappings loom.layered() {
+        officialMojangMappings()
+        parchment("org.parchmentmc.data:parchment-$mcversion:$mappings_version@zip")
+    }
+    modImplementation "net.fabricmc:fabric-loader:$flversion"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:$fabricversion"
+
+    //DEPENDENCIES
+    modImplementation "com.github.WaterMediaTeam:watermedia:$watermediaversion"
+    modImplementation "curse.maven:creativecore-257814:$creativecoreversion"
+    modImplementation "curse.maven:watervision-1167473:$watervisionversion"
+}
+
+tasks.processResources.outputs.upToDateWhen { false }
+processResources {
+    filesMatching(['fabric.mod.json', 'pack.mcmeta', 'resourcepacks/**/pack.mcmeta', "$modid.$mixin_file_suffix".toString()]) {
+        expand project.properties
+    }
+}
+
+jar {
+    manifest {
+        attributes "Specification-Title"        : modid
+        attributes "Specification-Vendor"       : modauthor
+        attributes "Specification-Version"      : version
+        attributes "Implementation-Title"       : modname
+        attributes "Implementation-Version"     : version
+        attributes "Implementation-Vendor"      : modauthor
+        attributes "Implementation-Timestamp"   : new Date().format("yyyy-MM-dd'T'HH:mm:ssZ")
+        attributes "MixinConfigs"               : "$modid.$mixin_file_suffix"
+    }
+    exclude('org/valkyrienskies/**')
+    finalizedBy(remapJar)
+}
+
+publishMods {
+    file = remapJar.archiveFile
+    displayName = "WF-$modloader/mc$mcversion/v$modversion"
+    type = STABLE
+    changelog = getChangelogText()
+
+    maxRetries = 2
+    dryRun = false
+
+    modLoaders.add(modloader.toLowerCase())
+
+    curseforge {
+        accessToken = CF_TOKEN
+        projectId = curseforgeid
+        minecraftVersions.addAll(mcversion)
+        javaVersions.addAll(JavaVersion.VERSION_17)
+        clientRequired = true
+        serverRequired = true
+        projectSlug = modid
+        requires("fabric-api", "creativecore", "watermedia", "watervision")
+    }
+
+    modrinth {
+        accessToken = MT_TOKEN
+        projectId = modrinthid
+        minecraftVersions.addAll(mcversion)
+        requires("fabric-api", "creativecore", "watermedia", "watervision")
+    }
+}
+
+def getChangelogText() {
+    def result = ""
+    for (String line: file('CHANGELOG.md').readLines('UTF-8')) {
+        if (line.isEmpty()) return result
+        result += line + '\n'
+    }
+    return result
+}

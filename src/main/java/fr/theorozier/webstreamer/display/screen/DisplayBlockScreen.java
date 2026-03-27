@@ -1,8 +1,10 @@
 package fr.theorozier.webstreamer.display.screen;
 
 import fr.theorozier.webstreamer.WebStreamerClientMod;
+import fr.theorozier.webstreamer.display.BigTVBlockEntity;
 import fr.theorozier.webstreamer.display.DisplayBlockEntity;
 import fr.theorozier.webstreamer.display.DisplayNetworking;
+import fr.theorozier.webstreamer.display.TVBlockEntity;
 import fr.theorozier.webstreamer.display.source.DisplaySource;
 import fr.theorozier.webstreamer.display.source.RawDisplaySource;
 import fr.theorozier.webstreamer.display.source.TwitchDisplaySource;
@@ -92,6 +94,10 @@ public class DisplayBlockScreen extends Screen {
     private boolean dirty;
     private ButtonWidget doneButton;
 
+    private boolean isTVDisplay() {
+        return this.display instanceof TVBlockEntity || this.display instanceof BigTVBlockEntity;
+    }
+
     public DisplayBlockScreen(DisplayBlockEntity display) {
         super(ScreenTexts.EMPTY);
         this.display = display;
@@ -99,6 +105,11 @@ public class DisplayBlockScreen extends Screen {
 
     @Override
     protected void init() {
+        // Check if this display is locked to creative players only
+        if (this.display.requiresOp() && (this.client == null || this.client.player == null || !this.client.player.isCreative())) {
+            this.close();
+            return;
+        }
 
         int xHalf = this.width / 2;
         int yTop = 60;
@@ -137,6 +148,11 @@ public class DisplayBlockScreen extends Screen {
         heightField.setChangedListener(val -> this.dirty = true);
         this.addDrawableChild(heightField);
 
+        if (isTVDisplay()) {
+            widthField.setEditable(false);
+            heightField.setEditable(false);
+        }
+
         // Offset section
         TextWidget offsetXText = new TextWidget(OFFSET_X_TEXT, this.textRenderer);
         offsetXText.setPosition(xHalf - 38, yTop + 1);
@@ -173,6 +189,12 @@ public class DisplayBlockScreen extends Screen {
         offsetZField.setText(offsetZVal);
         offsetZField.setChangedListener(val -> this.dirty = true);
         this.addDrawableChild(offsetZField);
+
+        if (isTVDisplay()) {
+            offsetXField.setEditable(false);
+            offsetYField.setEditable(false);
+            offsetZField.setEditable(false);
+        }
 
         DisplaySource source = this.display.getSource();
         SourceType sourceType = SourceType.RAW;
@@ -320,6 +342,17 @@ public class DisplayBlockScreen extends Screen {
 
         int yButtonTop = Math.min(Math.max(height / 4 + 120 + 12, ySourceBottom + 20), this.height - 25);
 
+        // Lock button to toggle creative-only access (only for creative mode players)
+        boolean isCreativePlayer = this.client != null && this.client.player != null && this.client.player.isCreative();
+        if (isCreativePlayer) {
+            ButtonWidget lockButton = ButtonWidget.builder(Text.literal(this.display.requiresOp() ? "Creative Only: On" : "Creative Only: Off"), button -> {
+                this.display.setRequiresOp(!this.display.requiresOp());
+                button.setMessage(Text.literal(this.display.requiresOp() ? "Creative Only: On" : "Creative Only: Off"));
+                this.dirty = true;
+            }).dimensions(xHalf - 4 - 150, yButtonTop - 30, 150, 20).build();
+            this.addDrawableChild(lockButton);
+        }
+
         doneButton = ButtonWidget.builder(ScreenTexts.DONE, button -> this.commitAndClose())
                 .dimensions(xHalf - 4 - 150, yButtonTop, 150, 20)
                 .build();
@@ -363,21 +396,30 @@ public class DisplayBlockScreen extends Screen {
         float width, height;
         double offsetX, offsetY, offsetZ;
 
-        try {
-            width = Float.parseFloat(this.widthField.getText());
-            height = Float.parseFloat(this.heightField.getText());
-        } catch (NumberFormatException e) {
-            this.showError(ERR_INVALID_SIZE);
-            return false;
-        }
+        if (isTVDisplay()) {
+            // Immutable TV dimensions and offsets (locked to model geometry)
+            width = this.display.getWidth();
+            height = this.display.getHeight();
+            offsetX = this.display.getOffsetX();
+            offsetY = this.display.getOffsetY();
+            offsetZ = this.display.getOffsetZ();
+        } else {
+            try {
+                width = Float.parseFloat(this.widthField.getText());
+                height = Float.parseFloat(this.heightField.getText());
+            } catch (NumberFormatException e) {
+                this.showError(ERR_INVALID_SIZE);
+                return false;
+            }
 
-        try {
-            offsetX = Double.parseDouble(this.offsetXField.getText());
-            offsetY = Double.parseDouble(this.offsetYField.getText());
-            offsetZ = Double.parseDouble(this.offsetZField.getText());
-        } catch (NumberFormatException e) {
-            this.showError(ERR_INVALID_OFFSET);
-            return false;
+            try {
+                offsetX = Double.parseDouble(this.offsetXField.getText());
+                offsetY = Double.parseDouble(this.offsetYField.getText());
+                offsetZ = Double.parseDouble(this.offsetZField.getText());
+            } catch (NumberFormatException e) {
+                this.showError(ERR_INVALID_OFFSET);
+                return false;
+            }
         }
 
         URI rawUri = null;
@@ -464,8 +506,10 @@ public class DisplayBlockScreen extends Screen {
 
         if (commit) {
 
-            this.display.setSize(width, height);
-            this.display.setOffset(offsetX, offsetY, offsetZ);
+            if (!isTVDisplay()) {
+                this.display.setSize(width, height);
+                this.display.setOffset(offsetX, offsetY, offsetZ);
+            }
 
             float audioDistance = this.audioDistanceSlider.getDistance();
             float audioVolume = this.audioVolumeSlider.getVolume();
@@ -492,6 +536,11 @@ public class DisplayBlockScreen extends Screen {
      * committed if any value is invalid.
      */
     private void commitAndClose() {
+        // Verify player is in creative mode before committing changes if locked
+        if (this.display.requiresOp() && (this.client == null || this.client.player == null || !this.client.player.isCreative())) {
+            this.close();
+            return;
+        }
         if (this.refresh(true)) {
             this.close();
         }

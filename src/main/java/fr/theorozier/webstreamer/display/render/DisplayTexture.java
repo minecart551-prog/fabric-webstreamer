@@ -63,6 +63,10 @@ public class DisplayTexture extends AbstractTexture {
         }
     }
 
+    public boolean isReady() {
+        return this.width > 0 && this.height > 0 && this.format > 0;
+    }
+
     @Override
     public void load(ResourceManager manager) { }
 

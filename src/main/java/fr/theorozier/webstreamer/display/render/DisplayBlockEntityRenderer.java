@@ -2,7 +2,9 @@ package fr.theorozier.webstreamer.display.render;
 
 import fr.theorozier.webstreamer.WebStreamerClientMod;
 import fr.theorozier.webstreamer.WebStreamerMod;
+import fr.theorozier.webstreamer.display.BigTVBlock;
 import fr.theorozier.webstreamer.display.DisplayBlock;
+import fr.theorozier.webstreamer.display.TVBlock;
 import fr.theorozier.webstreamer.display.DisplayBlockEntity;
 import fr.theorozier.webstreamer.mixin.WorldRendererInvoker;
 import net.fabricmc.api.EnvType;
@@ -53,8 +55,14 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
         this.textRenderer = ctx.getTextRenderer();
     }
 
+    private static boolean isTVBlock(net.minecraft.block.Block block) {
+        return block instanceof TVBlock || block instanceof BigTVBlock;
+    }
+
     @Override
     public void render(DisplayBlockEntity entity, float tickDelta, MatrixStack matrices, VertexConsumerProvider vertexConsumers, int light, int overlay) {
+
+        boolean isTV = isTVBlock(entity.getCachedState().getBlock());
 
         // Get the render data from the block entity, this is just an extension to the
         // block entity, so it will always be present and is lazily instantiated and will
@@ -104,8 +112,7 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
         // Apply block position offset first
         switch (attachment) {
             case NORTH, SOUTH, EAST, WEST -> matrices.translate(0.5f - facing.getOffsetX(), 0.5f, 0.5f - facing.getOffsetZ());
-            case UP -> matrices.translate(0.5f, -0.5f, 0.5f);
-            case DOWN -> matrices.translate(0.5f, 1.5f, 0.5f);
+            case UP, DOWN -> matrices.translate(0.5f, 0.5f, 0.5f);
         }
 
         // Apply user-defined offset based on attachment orientation
@@ -153,8 +160,21 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
 
         switch (attachment) {
             case NORTH, SOUTH, EAST, WEST -> {}
-            case UP -> matrices.multiply(ROTATE_FLOOR);
-            case DOWN -> matrices.multiply(ROTATE_CEILING);
+            case UP, DOWN -> {
+                // For TV and BigTV blocks, floor/ceiling states should still render vertically.
+                // Keep same face orientation as normal wall placements and avoid horizontal quad.
+            }
+        }
+
+        // Apply conditional rotation for floor/ceiling placement
+        if (attachment == Direction.UP) {
+            if (!isTVBlock(entity.getCachedState().getBlock())) {
+                matrices.multiply(ROTATE_FLOOR);
+            }
+        } else if (attachment == Direction.DOWN) {
+            if (!isTVBlock(entity.getCachedState().getBlock())) {
+                matrices.multiply(ROTATE_CEILING);
+            }
         }
 
         if (uri != null) {
@@ -163,10 +183,12 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
                 DisplayLayer layer = layerManager.getLayer(new DisplayLayerNode.Key(uri, entity));
 
                 if (layer.isLost()) {
-                    // Each time a display get here and the layer is lost, and then we request
-                    // a URL reset for the render data. With twitch sources it should reset
-                    // and re-fetch a new URL for the playlist.
                     entity.resetSourceUri();
+                    matrices.pop();
+                    return;
+                }
+
+                if (!(layer instanceof DisplayLayerSimple simpleLayer) || !simpleLayer.isReady()) {
                     matrices.pop();
                     return;
                 }
@@ -182,15 +204,24 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
                 float w = entity.getWidth();
                 float h = entity.getHeight();
 
+                // For TV and BigTV, force fixed panel geometry and quad depth
+                if (isTV) {
+                    w = entity.getWidth();
+                    h = entity.getHeight();
+                }
+
                 // Width/Height start coords
                 float hw = w / 2f;
                 float hh = h / 2f;
 
+                // TV models use a shallower depth to align with the front face.
+                float quadZ = isTV ? 0.01f : -0.55f;
+
                 Matrix4f positionMatrix = matrices.peek().getPositionMatrix();
-                buffer.vertex(positionMatrix,  hw, -hh, -0.55f).texture(0, 1).next();
-                buffer.vertex(positionMatrix, -hw, -hh, -0.55f).texture(1, 1).next();
-                buffer.vertex(positionMatrix, -hw,  hh, -0.55f).texture(1, 0).next();
-                buffer.vertex(positionMatrix,  hw,  hh, -0.55f).texture(0, 0).next();
+                buffer.vertex(positionMatrix,  hw, -hh, quadZ).texture(0, 1).next();
+                buffer.vertex(positionMatrix, -hw, -hh, quadZ).texture(1, 1).next();
+                buffer.vertex(positionMatrix, -hw,  hh, quadZ).texture(1, 0).next();
+                buffer.vertex(positionMatrix,  hw,  hh, quadZ).texture(0, 0).next();
 
             } catch (DisplayLayerNode.OutOfLayerException e) {
                 statusText = NO_LAYER_AVAILABLE_TEXT;

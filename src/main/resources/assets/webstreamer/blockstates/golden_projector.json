@@ -1,0 +1,33 @@
+{
+    "variants": {
+        "facing=north,attachment=up": { "model": "webstreamer:block/projector", "y": 0},
+        "facing=south,attachment=up": { "model": "webstreamer:block/projector", "y": 180},
+        "facing=west,attachment=up": { "model": "webstreamer:block/projector", "y": -90},
+        "facing=east,attachment=up": { "model": "webstreamer:block/projector", "y": -270},
+
+        "facing=north,attachment=north": { "model": "webstreamer:block/projector", "y": 0},
+        "facing=south,attachment=north": { "model": "webstreamer:block/projector", "y": 180},
+        "facing=west,attachment=north": { "model": "webstreamer:block/projector", "y": -90},
+        "facing=east,attachment=north": { "model": "webstreamer:block/projector", "y": -270},
+
+        "facing=north,attachment=south": { "model": "webstreamer:block/projector", "y": 0},
+        "facing=south,attachment=south": { "model": "webstreamer:block/projector", "y": 180},
+        "facing=west,attachment=south": { "model": "webstreamer:block/projector", "y": -90},
+        "facing=east,attachment=south": { "model": "webstreamer:block/projector", "y": -270},
+
+        "facing=north,attachment=east": { "model": "webstreamer:block/projector", "y": 0},
+        "facing=south,attachment=east": { "model": "webstreamer:block/projector", "y": 180},
+        "facing=west,attachment=east": { "model": "webstreamer:block/projector", "y": -90},
+        "facing=east,attachment=east": { "model": "webstreamer:block/projector", "y": -270},
+
+        "facing=north,attachment=west": { "model": "webstreamer:block/projector", "y": 0},
+        "facing=south,attachment=west": { "model": "webstreamer:block/projector", "y": 180},
+        "facing=west,attachment=west": { "model": "webstreamer:block/projector", "y": -90},
+        "facing=east,attachment=west": { "model": "webstreamer:block/projector", "y": -270},
+
+        "facing=north,attachment=down": { "model": "webstreamer:block/projector_ceiling", "y": 0},
+        "facing=south,attachment=down": { "model": "webstreamer:block/projector_ceiling", "y": 180},
+        "facing=west,attachment=down": { "model": "webstreamer:block/projector_ceiling", "y": -90},
+        "facing=east,attachment=down": { "model": "webstreamer:block/projector_ceiling", "y": -270}
+    }
+}

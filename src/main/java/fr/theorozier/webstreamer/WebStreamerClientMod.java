@@ -23,10 +23,25 @@ public class WebStreamerClientMod implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
+        System.out.println("============ WEBSTREAMER CLIENT INIT START ============");
+        WebStreamerMod.LOGGER.warn("========== WEBSTREAMER CLIENT MOD INITIALIZING ==========");
 
         // BlockEntityRendererRegistry.register(WebStreamerMod.DISPLAY_BLOCK_ENTITY, DisplayBlockEntityRenderer::new);
         BlockEntityRendererFactories.register(WebStreamerMod.DISPLAY_BLOCK_ENTITY, DisplayBlockEntityRenderer::new);
+        System.out.println("[CLIENT] Registered DISPLAY_BLOCK_ENTITY renderer");
+        WebStreamerMod.LOGGER.info("[CLIENT INIT] Registered DISPLAY_BLOCK_ENTITY renderer");
+        
+        BlockEntityRendererFactories.register(WebStreamerMod.TV_BLOCK_ENTITY, DisplayBlockEntityRenderer::new);
+        System.out.println("[CLIENT] Registered TV_BLOCK_ENTITY renderer");
+        WebStreamerMod.LOGGER.info("[CLIENT INIT] Registered TV_BLOCK_ENTITY renderer");
+        
+        BlockEntityRendererFactories.register(WebStreamerMod.BIG_TV_BLOCK_ENTITY, DisplayBlockEntityRenderer::new);
+        System.out.println("[CLIENT] Registered BIG_TV_BLOCK_ENTITY renderer");
+        WebStreamerMod.LOGGER.info("[CLIENT INIT] Registered BIG_TV_BLOCK_ENTITY renderer");
+        
         BlockRenderLayerMap.INSTANCE.putBlock(WebStreamerMod.DISPLAY_BLOCK, RenderLayer.getCutout());
+        BlockRenderLayerMap.INSTANCE.putBlock(WebStreamerMod.TV_BLOCK, RenderLayer.getCutout());
+        BlockRenderLayerMap.INSTANCE.putBlock(WebStreamerMod.BIG_TV_BLOCK, RenderLayer.getCutout());
     
         DISPLAY_LAYERS = new DisplayLayerManager();
         TWITCH_CLIENT = new TwitchClient();

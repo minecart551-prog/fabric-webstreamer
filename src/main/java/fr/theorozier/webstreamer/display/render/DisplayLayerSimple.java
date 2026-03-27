@@ -38,7 +38,6 @@ public abstract class DisplayLayerSimple implements DisplayLayerNode, DisplayLay
 		this.res = res;
 		this.tex = new DisplayTexture();
 		this.renderLayer = new DisplayRenderLayer(this);
-		WebStreamerMod.LOGGER.info(makeLog("Allocate display layer: {}"), this.uri);
 	}
 
 	@Override
@@ -47,7 +46,6 @@ public abstract class DisplayLayerSimple implements DisplayLayerNode, DisplayLay
 	@Override
 	public boolean cleanup(long now) {
 		if (now == 0 || now - this.lastUse >= LAYER_UNUSED_TIMEOUT) {
-			WebStreamerMod.LOGGER.info(makeLog("Free display layer: {}"), this.uri);
 			this.tex.clearGlId();
 			return true;
 		} else {
@@ -76,9 +74,13 @@ public abstract class DisplayLayerSimple implements DisplayLayerNode, DisplayLay
 		return this.renderLayer;
 	}
 
+	public boolean isReady() {
+		return this.tex.isReady();
+	}
+
 	/**
 	 * Internal function to prepare a log message for this specific layer.
-	 * @param message The message format to append to the header.
+	 * @param message The log message format to append to the header.
 	 * @return The log message ready to format.
 	 */
 	protected String makeLog(String message) {

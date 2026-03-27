@@ -1,0 +1,431 @@
+package me.srrapero720.waterframes.common.block.entity;
+
+import me.srrapero720.waterframes.DisplaysConfig;
+import me.srrapero720.waterframes.client.display.Display;
+import me.srrapero720.waterframes.common.block.DisplayBlock;
+import me.srrapero720.waterframes.common.block.data.DisplayCaps;
+import me.srrapero720.waterframes.common.block.data.DisplayData;
+import me.srrapero720.waterframes.common.block.data.types.PositionHorizontal;
+import me.srrapero720.waterframes.common.block.data.types.PositionVertical;
+import me.srrapero720.waterframes.common.network.DisplayNetwork;
+import me.srrapero720.waterframes.common.network.packets.*;
+import net.minecraft.world.level.chunk.LevelChunk;
+import org.watermedia.api.image.ImageAPI;
+import org.watermedia.api.image.ImageCache;
+import org.watermedia.api.math.MathAPI;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.api.Environment;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientBlockEntityEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ClientGamePacketListener;
+import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.entity.BlockEntityType;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.phys.AABB;
+import team.creative.creativecore.common.util.math.base.Axis;
+import team.creative.creativecore.common.util.math.base.Facing;
+import team.creative.creativecore.common.util.math.box.AlignedBox;
+
+import static me.srrapero720.waterframes.WaterFrames.LOGGER;
+
+public class DisplayTile extends BlockEntity {
+    private static int lagTickTime;
+    private static int lagTickCompensate;
+
+    public final DisplayData data;
+    public final DisplayCaps caps;
+    @Environment(EnvType.CLIENT) public ImageCache imageCache;
+    @Environment(EnvType.CLIENT) public Display display;
+    @Environment(EnvType.CLIENT) private boolean isReleased;
+
+    // this is more a runtime-block calculation variables, doesn't fix on DisplayData
+    private int analogRedstoneLevel = 0;
+
+    public DisplayTile(DisplayData data, DisplayCaps caps, BlockEntityType<?> type, BlockPos pos, BlockState blockState) {
+        super(type, pos, blockState);
+        this.data = data;
+        this.caps = caps;
+    }
+
+    public static void setLagTickTime(long ltt) {
+        if (ltt < 60000) {
+            lagTickTime = (int) (ltt / 50);
+        } else {
+            LOGGER.warn("Rejected tick correction of {}ms, overpass watchdog time", ltt);
+        }
+    }
+
+    public static void clearLagTickTime() {
+        lagTickCompensate += lagTickTime;
+        lagTickTime = 0;
+    }
+
+    @Environment(EnvType.CLIENT)
+    public Display activeDisplay() {
+        return display;
+    }
+
+    @Environment(EnvType.CLIENT)
+    public Display requestDisplay() {
+        if (!this.data.active || (!this.data.hasUri() && display != null)) {
+            this.cleanDisplay();
+            return null;
+        }
+
+        if (this.isReleased) {
+            this.imageCache = null;
+            return null;
+        }
+
+        if (imageCache == null && !this.data.hasUri()) {
+            this.cleanDisplay();
+            return null;
+        }
+
+        if (this.imageCache == null || (this.data.hasUri() && !this.imageCache.uri.equals(this.data.getUri()))) {
+            this.imageCache = ImageAPI.getCache(this.data.getUri(), Minecraft.getInstance());
+            this.cleanDisplay();
+        }
+
+        switch (imageCache.getStatus()) {
+            case LOADING, FAILED, READY -> {
+                if (this.display != null) return this.display;
+                return this.display = new Display(this);
+            }
+
+            case WAITING -> {
+                this.cleanDisplay();
+                this.imageCache.load();
+                return display;
+            }
+
+            case FORGOTTEN -> {
+                LOGGER.warn("Cached picture is forgotten, cleaning and reloading");
+                this.imageCache = null;
+                return null;
+            }
+
+            default -> {
+                LOGGER.warn("WATERMeDIA Behavior is modified, this shouldn't be executed");
+                return null;
+            }
+        }
+    }
+
+    @Override
+    public void saveAdditional(CompoundTag nbt) {
+        this.data.save(nbt, this);
+        super.saveAdditional(nbt);
+    }
+
+    @Override
+    public void load(CompoundTag nbt) {
+        this.data.load(nbt, this);
+        super.load(nbt);
+        this.setDirty();
+    }
+
+    @Environment(EnvType.CLIENT)
+    private void cleanDisplay() {
+        if (this.display != null) {
+            this.display.release();
+            this.display = null;
+        }
+    }
+
+    @Environment(EnvType.CLIENT)
+    private void release() {
+        this.cleanDisplay();
+        this.isReleased = true;
+    }
+
+    @Environment(EnvType.CLIENT)
+    public AlignedBox getRenderBox() {
+        return this.caps.getBox(this, getDirection(), getAttachedFace(), true);
+    }
+
+    @Environment(EnvType.CLIENT)
+    public AABB getRenderBoundingBox() {
+        // This doesn't works on fabric
+        return this.getRenderBox().getBB(this.getBlockPos());
+    }
+
+    @Override
+    public void setRemoved() {
+        if (this.isClient()) this.release();
+        super.setRemoved();
+    }
+
+    public LevelChunk getChunk() {
+        return this.level.getChunkAt(this.getBlockPos());
+    }
+
+//    public int getLightLevel() {
+//        return lightLevel;
+//    }
+
+    public int getAnalogOutput() {
+        return analogRedstoneLevel;
+    }
+
+    private int getLightLevel$internal() {
+        return !this.data.hasUri() ? 0 : (int) (((float) this.data.brightness / 255f) * level.getMaxLightLevel());
+    }
+
+    private int getAnalogOutput$internal() {
+        if (this.data.tickMax > 0 && this.data.active) {
+            return Math.round(((float) this.data.tick / (float) this.data.tickMax) * (BlockStateProperties.MAX_LEVEL_15 - 1)) + 1;
+        } else {
+            return 0;
+        }
+    }
+
+    public void setActive(boolean clientSide, boolean mode) {
+        if (clientSide) DisplayNetwork.sendServer(new ActivePacket(this.getBlockPos(), mode, true));
+        else            DisplayNetwork.sendClient(new ActivePacket(this.getBlockPos(), mode, true), this);
+    }
+
+    public void setMute(boolean clientSide, boolean mode) {
+        if (clientSide) DisplayNetwork.sendServer(new MutePacket(this.getBlockPos(), mode, true));
+        else            DisplayNetwork.sendClient(new MutePacket(this.getBlockPos(), mode, true), this);
+    }
+
+    public void setPause(boolean clientSide, boolean pause) {
+        if (clientSide) DisplayNetwork.sendServer(new PausePacket(this.getBlockPos(), pause, this.data.tick, true));
+        else            DisplayNetwork.sendClient(new PausePacket(this.getBlockPos(), pause, this.data.tick, true), this);
+    }
+
+    public void setStop(boolean clientSide) {
+        if (clientSide) DisplayNetwork.sendServer(new PausePacket(this.getBlockPos(), true, 0, true));
+        else            DisplayNetwork.sendClient(new PausePacket(this.getBlockPos(), true, 0, true), this);
+    }
+
+    public void volumeUp(boolean clientSide) {
+        if (clientSide) DisplayNetwork.sendServer(new VolumePacket(this.getBlockPos(), this.data.volume + 5, true));
+        else            DisplayNetwork.sendClient(new VolumePacket(this.getBlockPos(), this.data.volume + 5, true), this);
+    }
+
+    public void volumeDown(boolean clientSide) {
+        if (clientSide) DisplayNetwork.sendServer(new VolumePacket(this.getBlockPos(), this.data.volume - 5, true));
+        else            DisplayNetwork.sendClient(new VolumePacket(this.getBlockPos(), this.data.volume - 5, true), this);
+    }
+
+    public void fastFoward(boolean clientSide) {
+        if (clientSide) DisplayNetwork.sendServer(new TimePacket(this.getBlockPos(), Math.min(data.tick + MathAPI.msToTick(5000), this.data.tickMax), this.data.tickMax, true));
+        else            DisplayNetwork.sendClient(new TimePacket(this.getBlockPos(), Math.min(data.tick + (5000 / 50), this.data.tickMax), this.data.tickMax, true), this);
+    }
+
+    public void rewind(boolean clientSide) {
+        if (clientSide) DisplayNetwork.sendServer(new TimePacket(this.getBlockPos(), Math.max(data.tick - MathAPI.msToTick(5000), 0), this.data.tickMax, true));
+        else            DisplayNetwork.sendClient(new TimePacket(this.getBlockPos(), Math.max(data.tick - (5000 / 50), 0), this.data.tickMax, true), this);
+    }
+
+    public void nextUri(boolean clientSide) {
+        if (clientSide) DisplayNetwork.sendServer(new NextPacket(this.getBlockPos(), true));
+        else            DisplayNetwork.sendClient(new NextPacket(this.getBlockPos(), true), this);
+    }
+
+    public void prevUri(boolean clientSide) {
+        if (clientSide) DisplayNetwork.sendServer(new PreviousPacket(this.getBlockPos(), true));
+        else            DisplayNetwork.sendClient(new PreviousPacket(this.getBlockPos(), true), this);
+    }
+
+    public void syncTime(boolean clientSide, int tick, int maxTick) {
+        if (clientSide) DisplayNetwork.sendServer(new TimePacket(this.getBlockPos(), tick, maxTick, true));
+        else            DisplayNetwork.sendClient(new TimePacket(this.getBlockPos(), tick, maxTick, true), this);
+    }
+
+    public void loop(boolean clientSide, boolean loop) {
+        if (clientSide) DisplayNetwork.sendServer(new LoopPacket(this.getBlockPos(), loop, true));
+        else            DisplayNetwork.sendClient(new LoopPacket(this.getBlockPos(), loop, true), this);
+    }
+
+    public void position(boolean clientSide, PositionHorizontal horizontal, PositionVertical vertical) {
+        if (clientSide) DisplayNetwork.sendServer(new PositionPacket(this.getBlockPos(), horizontal, vertical, true));
+        else            DisplayNetwork.sendClient(new PositionPacket(this.getBlockPos(), horizontal, vertical, true), this);
+    }
+
+    public void tick(BlockState state) {
+        if (this.data.tickMax == -1 || this.data.tick < 0) this.data.tick = 0;
+
+        if (!this.data.paused && this.data.active) {
+            if (this.data.tick < this.data.tickMax) {
+                if (lagTickCompensate <= 0) {
+                    this.data.tick++;
+                } else {
+                    lagTickCompensate--;
+                }
+                if (lagTickTime != 0 && this.isServer()) {
+                    int ticks = this.data.tick + lagTickTime;
+                    while (ticks > this.data.tickMax) {
+                        ticks -= this.data.tickMax;
+                    }
+                    this.data.tick = ticks;
+                    this.setDirty();
+                }
+            } else {
+                if (this.data.loop || this.data.tickMax == -1) this.data.tick = 0;
+
+                if (!this.data.loop && this.data.tickMax != -1) {
+                    this.data.nextUri();
+                }
+            }
+        }
+
+        boolean refresh = false;
+
+        // REDSTONE
+        int redstoneLevel = getAnalogOutput$internal();
+        if (this.analogRedstoneLevel != redstoneLevel) {
+            this.analogRedstoneLevel = redstoneLevel;
+            refresh = true;
+        }
+
+        // LIGHT
+        boolean lightOnPlay = DisplaysConfig.forceLightOnPlay() || DisplaysConfig.useLightOnPlay() && this.data.lit;
+        int calculatedLight = getLightLevel$internal();
+        int currentLight = state.getValue(DisplayBlock.LIGHT_LEVEL);
+        if (lightOnPlay && currentLight != calculatedLight) {
+            state = state.setValue(DisplayBlock.LIGHT_LEVEL, calculatedLight);
+            refresh = true;
+        }
+
+        // DO NOT SPAM BLOCKSTATES AND CHUNK UPDATES WHEN ISN'T NEEDED
+        if (refresh) {
+            this.level.setBlock(this.getBlockPos(), state, Block.UPDATE_ALL);
+            this.level.updateNeighborsAt(this.getBlockPos(), this.getBlockState().getBlock());
+        }
+
+        if (this.isClient()) {
+            Display display = this.requestDisplay();
+            if (display != null && display.canTick()) display.tick();
+        }
+    }
+
+    public boolean isClient() {
+        return this.level != null && this.level.isClientSide;
+    }
+
+    public boolean isServer() {
+        return this.level != null && !this.level.isClientSide;
+    }
+
+    public Direction getDirection() {
+        return this.getBlockState().getValue(this.getDisplayBlock().getFacing());
+    }
+
+    public Direction getAttachedFace() {
+        return this.getBlockState().getValue(DisplayBlock.ATTACHED_FACE);
+    }
+
+    public boolean canHideModel() {
+        return this.getBlockState().hasProperty(DisplayBlock.VISIBLE);
+    }
+
+    public boolean isVisible() {
+        return this.getBlockState().getValue(DisplayBlock.VISIBLE);
+    }
+
+    public void setVisibility(boolean visible) {
+        this.level.setBlock(this.getBlockPos(), this.getBlockState().setValue(DisplayBlock.VISIBLE, visible), DisplayBlock.UPDATE_CLIENTS);
+    }
+
+    public DisplayBlock getDisplayBlock() {
+        return (DisplayBlock) this.getBlockState().getBlock();
+    }
+
+    public boolean isPowered() {
+        return this.getBlockState().getValue(DisplayBlock.POWERED);
+    }
+
+    @Override
+    public CompoundTag getUpdateTag() {
+        return this.saveWithFullMetadata();
+    }
+
+    @Override
+    public Packet<ClientGamePacketListener> getUpdatePacket() {
+        return ClientboundBlockEntityDataPacket.create(this);
+    }
+
+    public void setDirty() {
+        if (this.level != null) {
+            this.level.blockEntityChanged(this.getBlockPos());
+            this.level.sendBlockUpdated(this.getBlockPos(), this.getBlockState(), this.getBlockState(), DisplayBlock.UPDATE_ALL);
+        }
+    }
+
+//
+//    public void setDirty(Player player) {
+//        player.level.blockEntityChanged(this.worldPosition);
+//        player.level.sendBlockUpdated(this.worldPosition, this.getBlockState(), this.getBlockState(), 3);
+//    }
+
+    public static AlignedBox getBasicBox(DisplayTile tile) {
+        final var facing = Facing.get(tile.getDirection());
+        final var box = new AlignedBox();
+
+        if (facing.positive) box.setMax(facing.axis, tile.data.projectionDistance);
+        else box.setMin(facing.axis, 1f - tile.data.projectionDistance);
+
+        Axis one = facing.one();
+        Axis two = facing.two();
+
+        if (facing.axis != Axis.Z) {
+            one = facing.two();
+            two = facing.one();
+        }
+
+        box.setMin(one, tile.data.min.x);
+        box.setMax(one, tile.data.max.x);
+
+        box.setMin(two, tile.data.min.y);
+        box.setMax(two, tile.data.max.y);
+
+        if (tile.caps.projects() && (facing.toVanilla() == Direction.NORTH || facing.toVanilla() == Direction.EAST)) {
+            switch (tile.data.getPosX()) {
+                case LEFT -> {
+                    box.setMin(one, 1 - tile.data.getWidth());
+                    box.setMax(one, 1);
+                }
+                case RIGHT -> {
+                    box.setMax(one, tile.data.getWidth());
+                    box.setMin(one, 0f);
+                }
+            }
+        }
+
+        if (!tile.caps.projects() && (facing.toVanilla() == Direction.WEST || facing.toVanilla() == Direction.SOUTH)) {
+            switch (tile.data.getPosX()) {
+                case LEFT -> {
+                    box.setMin(one, 1 - tile.data.getWidth());
+                    box.setMax(one, 1);
+                }
+                case RIGHT -> {
+                    box.setMax(one, tile.data.getWidth());
+                    box.setMin(one, 0f);
+                }
+            }
+        }
+        return box;
+    }
+
+    public static void initCommon() {
+        ServerTickEvents.END_SERVER_TICK.register(server -> clearLagTickTime());
+    }
+
+    @Environment(EnvType.CLIENT)
+    public static void initClient() {
+        ClientBlockEntityEvents.BLOCK_ENTITY_UNLOAD.register((blockEntity, world) -> {
+            if (blockEntity instanceof DisplayTile tile) tile.release();
+        });
+    }
+}
