@@ -13,16 +13,26 @@ import static org.lwjgl.openal.AL11.*;
 @Environment(EnvType.CLIENT)
 public class AudioStreamingSource {
 
+	private final String name;
 	private int sourceId;
 	
 	/** Real system nano timestamp when play started. */
 	private long playTimestamp;
 	private long playBufferTimestamp;
+	private long lastRequestedTimestamp = -1;
 	
 	private ArrayDeque<AudioStreamingBuffer> queue = new ArrayDeque<>();
 	private long lastBufferTimestamp;
+
+	private boolean timestampOffsetInitialized = false;
+	private long timestampOffset = 0;
 	
 	public AudioStreamingSource() {
+		this("unknown");
+	}
+
+	public AudioStreamingSource(String name) {
+		this.name = name;
 		this.sourceId = alGenSources();
 		alSourcei(this.sourceId, AL_LOOPING, AL_FALSE);
 		alSourcei(this.sourceId, AL_SOURCE_RELATIVE, AL_FALSE);
@@ -48,18 +58,26 @@ public class AudioStreamingSource {
 		this.checkValid();
 		this.queue.forEach(AudioStreamingBuffer::free);
 		this.queue.clear();
+		this.timestampOffsetInitialized = false;
+		this.timestampOffset = 0;
+		this.lastRequestedTimestamp = -1;
+		this.lastBufferTimestamp = 0;
 		this.queue = null;
 		alSourceStop(this.sourceId);
 		alDeleteSources(this.sourceId);
 		this.sourceId = 0;
 	}
-	
+
 	/** Manually stop the source, when doing that all queued buffers are freed and cleared. */
 	public void stop() {
 		this.checkValid();
 		alSourceStop(this.sourceId);
 		this.queue.forEach(AudioStreamingBuffer::free);
 		this.queue.clear();
+		this.timestampOffsetInitialized = false;
+		this.timestampOffset = 0;
+		this.lastRequestedTimestamp = -1;
+		this.lastBufferTimestamp = 0;
 	}
 	
 	public void setPosition(Vec3i pos) {
@@ -88,8 +106,33 @@ public class AudioStreamingSource {
 	public void playFrom(long timestamp) {
 		
 		this.checkValid();
+		this.lastRequestedTimestamp = timestamp;
 	
+		if (timestamp < 0) {
+			WebStreamerMod.LOGGER.warn("[{}] Audio playFrom received invalid negative timestamp={}, clamping to 0", this.name, timestamp);
+			timestamp = 0;
+		}
+
+		if (!this.timestampOffsetInitialized && !this.queue.isEmpty()) {
+			long firstBufferTs = this.queue.peekFirst().timestamp;
+			long delta = firstBufferTs - timestamp;
+			if (delta != 0L) {
+				this.timestampOffset = delta;
+				this.timestampOffsetInitialized = true;
+				for (AudioStreamingBuffer buffer : this.queue) {
+					buffer.shiftTimestamp(this.timestampOffset);
+				}
+				this.lastBufferTimestamp -= this.timestampOffset;
+				WebStreamerMod.LOGGER.info("[{}] Audio timeline normalized by offset={} delta={} firstBufferTs={} newFirstTs={}", this.name, this.timestampOffset, delta, firstBufferTs, this.queue.peekFirst().timestamp);
+			}
+		}
+
 		boolean playing = this.isPlaying();
+		int queued = alGetSourcei(this.sourceId, AL_BUFFERS_QUEUED);
+		int processed = alGetSourcei(this.sourceId, AL_BUFFERS_PROCESSED);
+		int state = alGetSourcei(this.sourceId, AL_SOURCE_STATE);
+		WebStreamerMod.LOGGER.info("[{}] Audio playFrom called timestamp={} playing={} state={} queueSize={} queued={} processed={}", this.name, timestamp, playing, getStateName(state), this.queue.size(), queued, processed);
+	
 		if (!playing) {
 			this.removeAndFreeBuffersBefore(timestamp);
 		}
@@ -97,6 +140,7 @@ public class AudioStreamingSource {
 		this.unqueueAndFree();
 		
 		if (this.queue.isEmpty()) {
+			WebStreamerMod.LOGGER.debug("[{}] Audio source has no queued buffers at timestamp={} (playing={})", this.name, timestamp, playing);
 			// If no buffer is queued, just don't play.
 			return;
 		}
@@ -104,6 +148,7 @@ public class AudioStreamingSource {
 		AudioStreamingBuffer firstBuffer = this.queue.peekFirst();
 		
 		if (!playing && firstBuffer.timestamp > timestamp) {
+			WebStreamerMod.LOGGER.info("[{}] Audio source waiting for first buffer timestamp={} currentTimestamp={} queueSize={} state={}", this.name, firstBuffer.timestamp, timestamp, this.queue.size(), getStateName(state));
 			// If we are not playing, we should only start playing when the first buffer is reached.
 			return;
 		}
@@ -121,11 +166,15 @@ public class AudioStreamingSource {
 		}
 		
 		alSourceQueueBuffers(this.sourceId, buffers);
+		int queuedAfter = alGetSourcei(this.sourceId, AL_BUFFERS_QUEUED);
+		WebStreamerMod.LOGGER.info("[{}] Queued {} buffers to source, queuedAfter={} firstBufferTs={} state={}", this.name, buffersCount, queuedAfter, firstBufferTimestamp, getStateName(state));
 		
 		if (!playing) {
 			alSourcePlay(this.sourceId);
 			this.playTimestamp = System.nanoTime();
 			this.playBufferTimestamp = firstBufferTimestamp;
+			int stateAfter = alGetSourcei(this.sourceId, AL_SOURCE_STATE);
+			WebStreamerMod.LOGGER.info("[{}] Started OpenAL source, playBufferTimestamp={} stateAfter={}", this.name, this.playBufferTimestamp, getStateName(stateAfter));
 		}
 		
 	}
@@ -141,12 +190,31 @@ public class AudioStreamingSource {
 		this.checkValid();
 		
 		if (buffer.timestamp <= this.lastBufferTimestamp) {
-			WebStreamerMod.LOGGER.error("given {} us, expected more than {} us", buffer.timestamp, this.lastBufferTimestamp);
+			WebStreamerMod.LOGGER.debug("Skipping out-of-order audio buffer ts={} lastTs={}", buffer.timestamp, this.lastBufferTimestamp);
+			// Silently skip out-of-order buffers (can happen with streaming)
 			return;
 		}
 		
+		boolean shifted = false;
+		if (!this.timestampOffsetInitialized && this.queue.isEmpty() && this.lastRequestedTimestamp >= 0) {
+			long delta = buffer.timestamp - this.lastRequestedTimestamp;
+			if (delta != 0L) {
+				this.timestampOffset = delta;
+				this.timestampOffsetInitialized = true;
+				buffer.shiftTimestamp(this.timestampOffset);
+				shifted = true;
+				WebStreamerMod.LOGGER.info("[{}] Audio timeline normalized on first buffer by offset={} delta={} firstBufferTs={}", this.name, this.timestampOffset, delta, buffer.timestamp);
+			}
+		}
+
+		if (this.timestampOffsetInitialized && !shifted) {
+			buffer.shiftTimestamp(this.timestampOffset);
+		}
 		this.queue.addLast(buffer);
 		this.lastBufferTimestamp = buffer.timestamp;
+		int queued = alGetSourcei(this.sourceId, AL_BUFFERS_QUEUED);
+		int processed = alGetSourcei(this.sourceId, AL_BUFFERS_PROCESSED);
+		WebStreamerMod.LOGGER.debug("[{}] Queued audio buffer ts={} queueSize={} sourceQueued={} sourceProcessed={}", this.name, buffer.timestamp, this.queue.size(), queued, processed);
 		
 	}
 	
@@ -156,6 +224,7 @@ public class AudioStreamingSource {
 	public void unqueueAndFree() {
 		int numProcessed = alGetSourcei(this.sourceId, AL_BUFFERS_PROCESSED);
 		if (numProcessed > 0) {
+			WebStreamerMod.LOGGER.debug("Unqueuing {} processed buffers", numProcessed);
 			int[] buffers = new int[numProcessed];
 			alSourceUnqueueBuffers(this.sourceId, buffers);
 			if (!checkErrors("audio unqueue buffers")) {
@@ -182,6 +251,16 @@ public class AudioStreamingSource {
 	 * @param sectionName The section name to use when logging the error.
 	 * @return True if there is an OpenAL error.
 	 */
+	static String getStateName(int state) {
+		return switch (state) {
+			case AL_INITIAL -> "INITIAL";
+			case AL_PLAYING -> "PLAYING";
+			case AL_PAUSED -> "PAUSED";
+			case AL_STOPPED -> "STOPPED";
+			default -> "UNKNOWN(" + state + ")";
+		};
+	}
+
 	static boolean checkErrors(String sectionName) {
 		int i = alGetError();
 		if (i != 0) {

@@ -21,7 +21,7 @@ import java.net.URI;
 public abstract class DisplayLayerSimple implements DisplayLayerNode, DisplayLayer {
 	
 	/** The timeout for a layer to be considered unused */
-	protected static final long LAYER_UNUSED_TIMEOUT = 15L * 1000000000L;
+	protected static final long LAYER_UNUSED_TIMEOUT = 3L * 1000000000L;
 	
 	// Common //
 	protected final URI uri;
@@ -38,10 +38,8 @@ public abstract class DisplayLayerSimple implements DisplayLayerNode, DisplayLay
 		this.res = res;
 		this.tex = new DisplayTexture();
 		this.renderLayer = new DisplayRenderLayer(this);
+		this.lastUse = System.nanoTime();
 	}
-
-	@Override
-	public abstract void tick();
 
 	@Override
 	public boolean cleanup(long now) {

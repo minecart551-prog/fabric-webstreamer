@@ -19,7 +19,7 @@ public class AudioStreamingBuffer {
 	
 	private int bufferId;
 	/** When the buffer should be played. */
-	public final long timestamp;
+	public long timestamp;
 	/** Duration in microseconds. */
 	public final long duration;
 	
@@ -30,6 +30,10 @@ public class AudioStreamingBuffer {
 		this.bufferId = bufferId;
 		this.timestamp = timestamp;
 		this.duration = duration;
+	}
+
+	public void shiftTimestamp(long delta) {
+		this.timestamp -= delta;
 	}
 	
 	public int getBufferId() {

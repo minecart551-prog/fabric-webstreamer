@@ -17,7 +17,7 @@ public class DisplayLayerManager extends DisplayLayerMap<URI> {
     private static final int MAX_LAYERS_COST = 20 * 30;  // Approx 20 HLS layers.
 
     /** Interval of cleanups for unused display layers. */
-    private static final long CLEANUP_INTERVAL = 5L * 1000000000L;
+    private static final long CLEANUP_INTERVAL = 1L * 1000000000L;
 
     /** Common pools for shared and reusable heavy buffers. */
     private final DisplayLayerResources res = new DisplayLayerResources();

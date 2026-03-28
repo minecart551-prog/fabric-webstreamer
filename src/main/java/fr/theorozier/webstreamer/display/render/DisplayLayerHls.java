@@ -83,11 +83,6 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 	
 	private final AudioStreamingSource audioSource;
 
-	private Vec3i nearestAudioPos;
-	private float nearestAudioDist;
-	private float nearestAudioDistance;
-	private float nearestAudioVolume;
-
 	// Timing //
 	/** Time in nanoseconds (monotonic) of the last internal cleanup. */
 	private long lastCleanup = 0;
@@ -102,13 +97,12 @@ public class DisplayLayerHls extends DisplayLayerSimple {
   
 		this.asyncPlaylist = new AsyncProcessor<>(this::requestPlaylistBlocking, true);
 		this.asyncGrabbers = new AsyncMap<>(this::requestGrabberBlocking, grabber -> {
-			WebStreamerMod.LOGGER.info(makeLog("Stopping requested but unused grabber."));
 			grabber.stop();
 		}, GRABBER_REQUEST_TIMEOUT);
         
-        this.audioSource = new AudioStreamingSource();
+        this.audioSource = new AudioStreamingSource(this.makeLog("audio"));
 
-		this.resetPlaylist();
+        this.resetPlaylist();
 
     }
 
@@ -130,28 +124,13 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 
 	// Audio //
 
-	private void resetAudioSource() {
-		if (this.nearestAudioPos != null) {
-			this.audioSource.setPosition(this.nearestAudioPos);
-			this.audioSource.setAttenuation(this.nearestAudioDistance);
-			this.audioSource.setVolume(this.nearestAudioVolume);
-		} else {
-			this.audioSource.stop();
-		}
-		this.nearestAudioPos = null;
-		this.nearestAudioDist = Float.MAX_VALUE;
-		this.nearestAudioDistance = 0f;
-		this.nearestAudioVolume = 0f;
-	}
-
 	@Override
 	public void pushAudioSource(Vec3i pos, float dist, float audioDistance, float audioVolume) {
-		if (dist < this.nearestAudioDist) {
-			this.nearestAudioPos = pos;
-			this.nearestAudioDist = dist;
-			this.nearestAudioDistance = audioDistance;
-			this.nearestAudioVolume = audioVolume;
-		}
+		// Update this layer's audio properties directly
+		// Each layer plays independently, so audio persists across frames
+		this.audioSource.setPosition(pos);
+		this.audioSource.setAttenuation(audioDistance);
+		this.audioSource.setVolume(audioVolume);
 	}
 	
 	// Playlist //
@@ -223,7 +202,6 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 					long newInterval = (long) (lastSegment.duration() * 1000000000.0 * 0.7);
 					// Only change request interval if it represents more than 10% of the current interval.
 					if (Math.abs(newInterval - this.playlistRequestInterval) >= this.playlistRequestInterval / 10) {
-						WebStreamerMod.LOGGER.info(makeLog("New request interval: {}"), newInterval);
 						this.playlistRequestInterval = newInterval;
 					}
 				}
@@ -282,7 +260,9 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 				} catch (IOException e) {
 					WebStreamerMod.LOGGER.error(makeLog("Failed to grab remaining from current grabber."), e);
 				}
+				// Don't stop audio - let buffered audio continue playing during segment transition
 			} else {
+				// Full playlist reset - stop audio and start fresh
 				this.audioSource.stop();
 			}
 			this.res.getExecutor().execute(this.grabber::stop);
@@ -384,8 +364,6 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 				return;
 			}
 	
-	        WebStreamerMod.LOGGER.info(makeLog("Initializing display layer... Found {} segments."), this.playlistSegments.size());
-	
 	        this.profiler.push("initialize_layer");
 			
 			double totalDuration = 0.0;
@@ -486,8 +464,6 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 
         this.profiler.pop();
 		this.profiler.endTick();
-		
-		this.resetAudioSource();
 		
         /*if (cleanup) {
 	        ProfileResult res = this.profiler.getResult();

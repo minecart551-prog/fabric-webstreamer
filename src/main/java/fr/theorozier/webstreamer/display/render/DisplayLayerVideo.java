@@ -56,14 +56,12 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     // Audio
     private ShortBuffer tempAudioBuffer;
     private final AudioStreamingSource audioSource;
-    private Vec3i nearestAudioPos;
-    private float nearestAudioDist     = Float.MAX_VALUE;
-    private float nearestAudioDistance = 0f;
-    private float nearestAudioVolume   = 0f;
+
+    private volatile boolean destroyed = false;
 
     public DisplayLayerVideo(URI uri, DisplayLayerResources res) {
         super(uri, res);
-        this.audioSource = new AudioStreamingSource();
+        this.audioSource = new AudioStreamingSource(this.makeLog("audio"));
     }
 
     // -------------------------------------------------------------------------
@@ -78,6 +76,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     @Override
     public boolean cleanup(long now) {
         if (super.cleanup(now)) {
+            this.destroyed = true;
             this.stopGrabber();
             this.audioSource.free();
             return true;
@@ -96,26 +95,11 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
     @Override
     public void pushAudioSource(Vec3i pos, float dist, float audioDistance, float audioVolume) {
-        if (dist < this.nearestAudioDist) {
-            this.nearestAudioPos      = pos;
-            this.nearestAudioDist     = dist;
-            this.nearestAudioDistance = audioDistance;
-            this.nearestAudioVolume   = audioVolume;
-        }
-    }
-
-    private void flushAudioSource() {
-        if (this.nearestAudioPos != null) {
-            this.audioSource.setPosition(this.nearestAudioPos);
-            this.audioSource.setAttenuation(this.nearestAudioDistance);
-            this.audioSource.setVolume(this.nearestAudioVolume);
-        } else {
-            this.audioSource.stop();
-        }
-        this.nearestAudioPos      = null;
-        this.nearestAudioDist     = Float.MAX_VALUE;
-        this.nearestAudioDistance = 0f;
-        this.nearestAudioVolume   = 0f;
+        // Update this layer's audio properties immediately
+        // Each layer plays independently, so audio persists across frames
+        this.audioSource.setPosition(pos);
+        this.audioSource.setAttenuation(audioDistance);
+        this.audioSource.setVolume(audioVolume);
     }
 
     // -------------------------------------------------------------------------
@@ -130,6 +114,11 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     private void startGrabberAsync() {
         Path tmp = null;
         ShortBuffer audioBuf = this.res.allocAudioBuffer();
+        if (this.destroyed) {
+            this.res.freeAudioBuffer(audioBuf);
+            return;
+        }
+        WebStreamerMod.LOGGER.info(makeLog("Starting direct video grabber, uri={}"), this.uri);
         try {
 
             // Reset audio timestamp tracker for new video
@@ -171,6 +160,14 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 }
             }
 
+            if (this.destroyed) {
+                fg.releaseUnsafe();
+                deleteTempFile(tmp);
+                this.res.freeAudioBuffer(audioBuf);
+                this.grabberPending = false;
+                return;
+            }
+
             this.grabber         = fg;
             this.tempFile        = tmp;
             this.tempAudioBuffer = audioBuf;
@@ -178,6 +175,8 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             this.playbackMicros  = 0;
             this.lastTickNanos   = System.nanoTime();
             this.grabberReady    = true;
+            this.grabberPending  = false;
+            WebStreamerMod.LOGGER.info(makeLog("Direct video grabber ready, first frame ts={} usec"), firstFrameTimestamp);
 
         } catch (Exception e) {
             WebStreamerMod.LOGGER.error(makeLog("Failed to start direct video grabber."), e);
@@ -189,6 +188,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     }
 
     private void stopGrabber() {
+        WebStreamerMod.LOGGER.info(makeLog("Stopping grabber, grabberReady={} grabberPending={}"), this.grabberReady, this.grabberPending);
         if (this.grabber != null) {
             try { this.grabber.releaseUnsafe(); } catch (Exception ignored) { }
             this.grabber = null;
@@ -222,22 +222,28 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     @Override
     public void tick() {
 
+        this.lastUse = System.nanoTime();
+
         if (this.grabberFailed) {
-            this.flushAudioSource();
+            // Layer is permanently failed, stop audio
+            WebStreamerMod.LOGGER.info(makeLog("Grabber failed, stopping audio."));
+            this.audioSource.stop();
             return;
         }
 
+        // Note: pushAudioSource() will be called during rendering to update audio position/volume
+
         // Submit the download+start task once to the executor.
         if (!this.grabberPending && !this.grabberReady) {
+            WebStreamerMod.LOGGER.info(makeLog("Requesting grabber start."));
             this.grabberPending = true;
             this.res.getExecutor().submit(this::startGrabberAsync);
-            this.flushAudioSource();
             return;
         }
 
         // Still waiting for download to finish.
         if (!this.grabberReady) {
-            this.flushAudioSource();
+            WebStreamerMod.LOGGER.debug(makeLog("Grabber pending, waiting for ready state."));
             return;
         }
 
@@ -252,14 +258,15 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             // Display the buffered frame if it's ready
             if (this.lastFrame != null && this.lastFrame.image != null) {
                 long realTimestamp = this.lastFrame.timestamp - this.refTimestamp;
+                WebStreamerMod.LOGGER.debug(makeLog("Buffered frame pending, realTimestamp={} playbackMicros={}"), realTimestamp, this.playbackMicros);
                 if (realTimestamp <= this.playbackMicros) {
                     this.tex.upload(this.lastFrame);
                     this.audioSource.playFrom(this.lastFrame.timestamp);
                     this.failedGrabs = 0;
                     this.lastFrame = null;
+                    WebStreamerMod.LOGGER.info(makeLog("Displayed buffered frame at ts={}"), realTimestamp);
                 } else {
                     // Buffered frame not ready yet, don't grab more
-                    this.flushAudioSource();
                     return;
                 }
             }
@@ -267,6 +274,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             // Grab all available frames and audio
             Frame frame;
             int framesDisplayed = 0;
+            int audioBuffersQueued = 0;
             while ((frame = this.grabber.grab()) != null) {
                 if (frame.image != null) {
                     long realTimestamp = frame.timestamp - this.refTimestamp;
@@ -279,6 +287,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                     } else {
                         // Frame is ahead, buffer it for later
                         this.lastFrame = frame;
+                        WebStreamerMod.LOGGER.debug(makeLog("Buffered future frame at ts={} playbackMicros={}"), realTimestamp, this.playbackMicros);
                         break;
                     }
                 } else if (frame.samples != null) {
@@ -286,10 +295,26 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                     AudioStreamingBuffer audioBuf = AudioStreamingBuffer.fromFrame(
                             this.tempAudioBuffer, frame);
                     this.audioSource.queueBuffer(audioBuf);
+                    audioBuffersQueued++;
+                }
+            }
+
+            if (audioBuffersQueued > 0) {
+                long currentTimestamp = this.refTimestamp + this.playbackMicros;
+                WebStreamerMod.LOGGER.debug(makeLog("Audio flush timestamp={} playbackMicros={} lastFrameTs={}"), currentTimestamp, this.playbackMicros, this.lastFrame != null ? this.lastFrame.timestamp : -1L);
+                this.audioSource.playFrom(currentTimestamp);
+            }
+
+            if (framesDisplayed > 0 || audioBuffersQueued > 0) {
+                if (framesDisplayed == 0 && audioBuffersQueued > 0) {
+                    WebStreamerMod.LOGGER.warn(makeLog("Audio only tick: audioQueued={} playbackMicros={} queuedFrames={}"), audioBuffersQueued, this.playbackMicros, this.lastFrame != null ? this.lastFrame.timestamp - this.refTimestamp : -1L);
+                } else {
+                    WebStreamerMod.LOGGER.info(makeLog("tick result: framesDisplayed={} audioQueued={}"), framesDisplayed, audioBuffersQueued);
                 }
             }
 
             if (frame == null) {
+                WebStreamerMod.LOGGER.warn(makeLog("Reached EOF, stopping grabber."));
                 this.stopGrabber();
                 this.grabberFailed = true;
             }
@@ -302,9 +327,8 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 WebStreamerMod.LOGGER.error(makeLog("Too many failed grabs, marking layer as lost."));
                 this.stopGrabber();
                 this.grabberFailed = true;
+                this.audioSource.stop();
             }
         }
-
-        this.flushAudioSource();
     }
 }
