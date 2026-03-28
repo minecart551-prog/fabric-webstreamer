@@ -182,13 +182,17 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
                 BlockPos pos = entity.getPos();
                 float audioDistance = entity.getAudioDistance();
                 int playerDist = pos.getManhattanDistance(this.gameRenderer.getCamera().getBlockPos());
-                if (audioDistance > 0f && playerDist > audioDistance) {
-                    // Player is out of range, skip rendering the video entirely
+                boolean inRange = !(audioDistance > 0f && playerDist > audioDistance);
+
+                DisplayLayer layer = layerManager.getLayer(new DisplayLayerNode.Key(uri, entity));
+                if (layer instanceof DisplayLayerSimple simpleLayer) {
+                    simpleLayer.setInRange(inRange);
+                }
+
+                if (!inRange) {
                     matrices.pop();
                     return;
                 }
-
-                DisplayLayer layer = layerManager.getLayer(new DisplayLayerNode.Key(uri, entity));
 
                 if (layer.isLost()) {
                     entity.resetSourceUri();
@@ -196,7 +200,7 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
                     return;
                 }
 
-                if (!(layer instanceof DisplayLayerSimple simpleLayer) || !simpleLayer.isReady()) {
+                if (!(layer instanceof DisplayLayerSimple simpleLayer2) || !simpleLayer2.isReady()) {
                     matrices.pop();
                     return;
                 }

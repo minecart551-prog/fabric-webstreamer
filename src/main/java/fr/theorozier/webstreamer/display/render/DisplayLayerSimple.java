@@ -32,6 +32,17 @@ public abstract class DisplayLayerSimple implements DisplayLayerNode, DisplayLay
 	// Timing //
 	/** Time in nanoseconds (monotonic) of the last use. */
 	protected long lastUse = 0;
+
+	/** Whether this layer is currently in range for ticking/rendering. */
+	private boolean inRange = true;
+
+	public void setInRange(boolean inRange) {
+		this.inRange = inRange;
+	}
+
+	public boolean isInRange() {
+		return this.inRange;
+	}
 	
 	public DisplayLayerSimple(URI uri, DisplayLayerResources res) {
 		this.uri = uri;

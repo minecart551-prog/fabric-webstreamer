@@ -20,8 +20,12 @@ public abstract class DisplayLayerMap<K> implements DisplayLayerNode {
 
     @Override
     public void tick() {
-        // Simply delegate.
-        this.layers.values().forEach(DisplayLayerNode::tick);
+        // Only tick layers that are in range, or all if not a DisplayLayerSimple
+        this.layers.values().forEach(layer -> {
+            if (!(layer instanceof DisplayLayerSimple) || ((DisplayLayerSimple) layer).isInRange()) {
+                layer.tick();
+            }
+        });
     }
 
     @Override
