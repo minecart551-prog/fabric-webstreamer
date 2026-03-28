@@ -199,6 +199,10 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     }
 
     private void stopGrabber() {
+        // Only stop and log if grabber is actually running or pending
+        if (!this.grabberReady && !this.grabberPending) {
+            return;
+        }
         WebStreamerMod.LOGGER.info(makeLog("Stopping grabber, grabberReady={} grabberPending={}"), this.grabberReady, this.grabberPending);
         if (this.grabber != null) {
             try { this.grabber.releaseUnsafe(); } catch (Exception ignored) { }
