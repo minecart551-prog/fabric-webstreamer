@@ -179,6 +179,14 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
 
         if (uri != null) {
             try {
+                BlockPos pos = entity.getPos();
+                float audioDistance = entity.getAudioDistance();
+                int playerDist = pos.getManhattanDistance(this.gameRenderer.getCamera().getBlockPos());
+                if (audioDistance > 0f && playerDist > audioDistance) {
+                    // Player is out of range, skip rendering the video entirely
+                    matrices.pop();
+                    return;
+                }
 
                 DisplayLayer layer = layerManager.getLayer(new DisplayLayerNode.Key(uri, entity));
 
@@ -195,10 +203,8 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
 
                 VertexConsumer buffer = vertexConsumers.getBuffer(layer.getRenderLayer());
 
-                BlockPos pos = entity.getPos();
-                float audioDistance = entity.getAudioDistance();
                 float audioVolume = entity.getAudioVolume();
-                layer.pushAudioSource(pos, pos.getManhattanDistance(this.gameRenderer.getCamera().getBlockPos()), audioDistance, audioVolume);
+                layer.pushAudioSource(pos, playerDist, audioDistance, audioVolume);
 
                 // Width/Height end coords
                 float w = entity.getWidth();

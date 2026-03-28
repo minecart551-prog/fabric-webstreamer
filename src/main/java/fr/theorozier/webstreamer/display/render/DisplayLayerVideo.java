@@ -54,6 +54,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     private long playbackMicros = 0;
 
     // Audio
+    private boolean audioInRange = true;
     private ShortBuffer tempAudioBuffer;
     private final AudioStreamingSource audioSource;
 
@@ -95,6 +96,16 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
     @Override
     public void pushAudioSource(Vec3i pos, float dist, float audioDistance, float audioVolume) {
+        this.audioInRange = audioDistance > 0f && dist <= audioDistance;
+        if (!this.audioInRange) {
+            WebStreamerMod.LOGGER.info(makeLog("audioInRange=false dist={} max={}"), dist, audioDistance);
+            if (this.audioSource.isPlaying()) {
+                WebStreamerMod.LOGGER.info(makeLog("Player out of audio range dist={} max={}, stopping audio source"), dist, audioDistance);
+            }
+            this.audioSource.stop();
+            return;
+        }
+
         // Update this layer's audio properties immediately
         // Each layer plays independently, so audio persists across frames
         this.audioSource.setPosition(pos);
@@ -254,13 +265,36 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         }
         this.lastTickNanos = now;
 
+        if (this.audioSource != null && this.audioSource.isPlaying() && this.refTimestamp >= 0) {
+            long audioTs = this.audioSource.getEstimatedPlaybackTimestamp();
+            if (audioTs > 0) {
+                long audioRelative = audioTs - this.refTimestamp;
+                long diff = audioRelative - this.playbackMicros;
+                if (diff > 50000L) {
+                    this.playbackMicros = audioRelative;
+                    WebStreamerMod.LOGGER.debug(makeLog("Synced video clock to audio at {} (diff={}us)"), audioRelative, diff);
+                }
+            }
+        }
+
         try {
+            // Stop audio if the player is currently out of range
+            if (!this.audioInRange && this.audioSource.isPlaying()) {
+                this.audioSource.stop();
+            }
+
+            // If out of range, do not tick audio or video at all
+            if (!this.audioInRange) {
+                return;
+            }
+
             // Display the buffered frame if it's ready
             if (this.lastFrame != null && this.lastFrame.image != null) {
                 long realTimestamp = this.lastFrame.timestamp - this.refTimestamp;
                 WebStreamerMod.LOGGER.debug(makeLog("Buffered frame pending, realTimestamp={} playbackMicros={}"), realTimestamp, this.playbackMicros);
                 if (realTimestamp <= this.playbackMicros) {
                     this.tex.upload(this.lastFrame);
+                    this.playbackMicros = realTimestamp;
                     this.audioSource.playFrom(this.lastFrame.timestamp);
                     this.failedGrabs = 0;
                     this.lastFrame = null;
@@ -281,6 +315,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                     if (realTimestamp <= this.playbackMicros) {
                         // Frame is ready to display
                         this.tex.upload(frame);
+                        this.playbackMicros = realTimestamp;
                         this.audioSource.playFrom(frame.timestamp);
                         this.failedGrabs = 0;
                         framesDisplayed++;

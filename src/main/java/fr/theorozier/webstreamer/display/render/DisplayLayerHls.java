@@ -82,6 +82,7 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 	// Sound //
 	
 	private final AudioStreamingSource audioSource;
+	private boolean audioInRange = true;
 
 	// Timing //
 	/** Time in nanoseconds (monotonic) of the last internal cleanup. */
@@ -126,8 +127,16 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 
 	@Override
 	public void pushAudioSource(Vec3i pos, float dist, float audioDistance, float audioVolume) {
-		// Update this layer's audio properties directly
-		// Each layer plays independently, so audio persists across frames
+        this.audioInRange = audioDistance > 0f && dist <= audioDistance;
+        if (!this.audioInRange) {
+            WebStreamerMod.LOGGER.info(makeLog("audioInRange=false dist={} max={}"), dist, audioDistance);
+            if (this.audioSource.isPlaying()) {
+                WebStreamerMod.LOGGER.info(makeLog("Player out of audio range dist={} max={}, stopping audio source"), dist, audioDistance);
+            }
+            this.audioSource.stop();
+            return;
+        }
+
 		this.audioSource.setPosition(pos);
 		this.audioSource.setAttenuation(audioDistance);
 		this.audioSource.setVolume(audioVolume);
@@ -256,7 +265,13 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 		if (this.grabber != null) {
 			if (toBeContinued) {
 				try {
-					this.grabber.grabRemaining(this.audioSource::queueBuffer);
+					this.grabber.grabRemaining(buffer -> {
+						if (this.audioInRange) {
+							this.audioSource.queueBuffer(buffer);
+						} else {
+							buffer.free();
+						}
+					});
 				} catch (IOException e) {
 					WebStreamerMod.LOGGER.error(makeLog("Failed to grab remaining from current grabber."), e);
 				}
@@ -421,14 +436,26 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 		long segmentTimestampMicros = (long) (this.segmentTimestamp * 1000000);
 
         this.profiler.push("grab_frame");
-		Frame frame = this.grabber.grabAt(segmentTimestampMicros, this.audioSource::queueBuffer);
+		Frame frame = this.grabber.grabAt(segmentTimestampMicros, buffer -> {
+			if (this.audioInRange) {
+				this.audioSource.queueBuffer(buffer);
+			} else {
+				buffer.free();
+			}
+		});
 		this.profiler.pop();
+		
+		if (!this.audioInRange && this.audioSource.isPlaying()) {
+			this.audioSource.stop();
+		}
 		
 		if (frame != null) {
 			this.profiler.push("upload_image");
 			this.tex.upload(frame);
 			this.profiler.swap("play_audio");
-			this.audioSource.playFrom(frame.timestamp);
+			if (this.audioInRange) {
+				this.audioSource.playFrom(frame.timestamp);
+			}
 			this.profiler.pop();
 		}
 		

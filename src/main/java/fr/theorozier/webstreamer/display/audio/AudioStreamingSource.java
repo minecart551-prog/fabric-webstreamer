@@ -26,6 +26,7 @@ public class AudioStreamingSource {
 
 	private boolean timestampOffsetInitialized = false;
 	private long timestampOffset = 0;
+	private static final long TIMESTAMP_REBASE_THRESHOLD = 1000000L;
 	
 	public AudioStreamingSource() {
 		this("unknown");
@@ -62,6 +63,8 @@ public class AudioStreamingSource {
 		this.timestampOffset = 0;
 		this.lastRequestedTimestamp = -1;
 		this.lastBufferTimestamp = 0;
+		this.playTimestamp = 0;
+		this.playBufferTimestamp = 0;
 		this.queue = null;
 		alSourceStop(this.sourceId);
 		alDeleteSources(this.sourceId);
@@ -78,6 +81,8 @@ public class AudioStreamingSource {
 		this.timestampOffset = 0;
 		this.lastRequestedTimestamp = -1;
 		this.lastBufferTimestamp = 0;
+		this.playTimestamp = 0;
+		this.playBufferTimestamp = 0;
 	}
 	
 	public void setPosition(Vec3i pos) {
@@ -113,25 +118,27 @@ public class AudioStreamingSource {
 			timestamp = 0;
 		}
 
-		if (!this.timestampOffsetInitialized && !this.queue.isEmpty()) {
+		boolean playing = this.isPlaying();
+
+		if (!this.queue.isEmpty()) {
 			long firstBufferTs = this.queue.peekFirst().timestamp;
-			long delta = firstBufferTs - timestamp;
-			if (delta != 0L) {
-				this.timestampOffset = delta;
+			long candidateOffset = firstBufferTs - timestamp;
+			long shift = candidateOffset;
+			if (!this.timestampOffsetInitialized || (!playing && Math.abs(shift) > TIMESTAMP_REBASE_THRESHOLD)) {
+				this.timestampOffset += shift;
 				this.timestampOffsetInitialized = true;
 				for (AudioStreamingBuffer buffer : this.queue) {
-					buffer.shiftTimestamp(this.timestampOffset);
+					buffer.shiftTimestamp(shift);
 				}
-				this.lastBufferTimestamp -= this.timestampOffset;
-				WebStreamerMod.LOGGER.info("[{}] Audio timeline normalized by offset={} delta={} firstBufferTs={} newFirstTs={}", this.name, this.timestampOffset, delta, firstBufferTs, this.queue.peekFirst().timestamp);
+				this.lastBufferTimestamp -= shift;
+				WebStreamerMod.LOGGER.info("[{}] Audio timeline normalized by shift={} candidateOffset={} firstBufferTs={} newFirstTs={}", this.name, shift, candidateOffset, firstBufferTs, this.queue.peekFirst().timestamp);
 			}
 		}
-
-		boolean playing = this.isPlaying();
 		int queued = alGetSourcei(this.sourceId, AL_BUFFERS_QUEUED);
 		int processed = alGetSourcei(this.sourceId, AL_BUFFERS_PROCESSED);
 		int state = alGetSourcei(this.sourceId, AL_SOURCE_STATE);
-		WebStreamerMod.LOGGER.info("[{}] Audio playFrom called timestamp={} playing={} state={} queueSize={} queued={} processed={}", this.name, timestamp, playing, getStateName(state), this.queue.size(), queued, processed);
+		long lead = this.queue.isEmpty() ? 0 : this.queue.peekFirst().timestamp - timestamp;
+		WebStreamerMod.LOGGER.info("[{}] Audio playFrom called timestamp={} playing={} state={} queueSize={} queued={} processed={} lead={}us", this.name, timestamp, playing, getStateName(state), this.queue.size(), queued, processed, lead);
 	
 		if (!playing) {
 			this.removeAndFreeBuffersBefore(timestamp);
@@ -196,14 +203,21 @@ public class AudioStreamingSource {
 		}
 		
 		boolean shifted = false;
-		if (!this.timestampOffsetInitialized && this.queue.isEmpty() && this.lastRequestedTimestamp >= 0) {
-			long delta = buffer.timestamp - this.lastRequestedTimestamp;
-			if (delta != 0L) {
-				this.timestampOffset = delta;
-				this.timestampOffsetInitialized = true;
-				buffer.shiftTimestamp(this.timestampOffset);
-				shifted = true;
-				WebStreamerMod.LOGGER.info("[{}] Audio timeline normalized on first buffer by offset={} delta={} firstBufferTs={}", this.name, this.timestampOffset, delta, buffer.timestamp);
+		if (this.queue.isEmpty()) {
+			if (this.timestampOffsetInitialized) {
+				this.timestampOffsetInitialized = false;
+				this.timestampOffset = 0;
+				WebStreamerMod.LOGGER.info("[{}] Audio queue emptied, resetting timestamp offset before new refill", this.name);
+			}
+			if (this.lastRequestedTimestamp >= 0) {
+				long delta = buffer.timestamp - this.lastRequestedTimestamp;
+				if (delta != 0L) {
+					this.timestampOffset = delta;
+					this.timestampOffsetInitialized = true;
+					buffer.shiftTimestamp(this.timestampOffset);
+					shifted = true;
+					WebStreamerMod.LOGGER.info("[{}] Audio timeline normalized on first buffer by offset={} delta={} firstBufferTs={} requestedTs={}", this.name, this.timestampOffset, delta, buffer.timestamp, this.lastRequestedTimestamp);
+				}
 			}
 		}
 
@@ -259,6 +273,17 @@ public class AudioStreamingSource {
 			case AL_STOPPED -> "STOPPED";
 			default -> "UNKNOWN(" + state + ")";
 		};
+	}
+
+	public long getEstimatedPlaybackTimestamp() {
+		if (!this.isValid()) {
+			return -1;
+		}
+		if (!this.isPlaying() || this.playTimestamp == 0) {
+			return this.playBufferTimestamp;
+		}
+		long elapsedMicros = (System.nanoTime() - this.playTimestamp) / 1000L;
+		return this.playBufferTimestamp + elapsedMicros;
 	}
 
 	static boolean checkErrors(String sectionName) {
