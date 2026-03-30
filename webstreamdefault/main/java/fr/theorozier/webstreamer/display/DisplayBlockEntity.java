@@ -1,5 +1,3 @@
-
-
 package fr.theorozier.webstreamer.display;
 
 import fr.theorozier.webstreamer.WebStreamerMod;
@@ -8,7 +6,6 @@ import fr.theorozier.webstreamer.display.source.RawDisplaySource;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.nbt.NbtCompound;
-import net.minecraft.nbt.NbtDouble;
 import net.minecraft.nbt.NbtFloat;
 import net.minecraft.nbt.NbtString;
 import net.minecraft.network.listener.ClientPlayPacketListener;
@@ -25,57 +22,29 @@ import java.util.Objects;
  * {@link DisplaySource}, size and audio configuration.</p>
  */
 public class DisplayBlockEntity extends BlockEntity {
-
-    private boolean removed = false;
-    // ...existing code...
-
-    @Override
-    public void markRemoved() {
-        super.markRemoved();
-        this.removed = true;
-        this.source = null;
-        synchronized (this.cachedRenderDataGuard) {
-            this.cachedRenderData = null;
-        }
-        // --- WaterFramesFabric-style cleanup: force layer cleanup to stop video/audio and delete temp files ---
-        if (net.fabricmc.api.EnvType.CLIENT == net.fabricmc.loader.api.FabricLoader.getInstance().getEnvironmentType()) {
-            fr.theorozier.webstreamer.WebStreamerClientMod.DISPLAY_LAYERS.cleanup(0L); // 0L = force cleanup
-        }
-    }
-
+    
     private DisplaySource source = new RawDisplaySource();
     private float width = 1;
     private float height = 1;
     private float audioDistance = 10f;
     private float audioVolume = 1f;
-    private double offsetX = 0.0;
-    private double offsetY = 0.0;
-    private double offsetZ = 0.0;
-    private boolean requiresOp = false;
-
-    protected DisplayBlockEntity(net.minecraft.block.entity.BlockEntityType<? extends DisplayBlockEntity> type, BlockPos pos, BlockState state) {
-        super(type, pos, state);
-    }
 
     public DisplayBlockEntity(BlockPos pos, BlockState state) {
-        this(WebStreamerMod.DISPLAY_BLOCK_ENTITY, pos, state);
+        super(WebStreamerMod.DISPLAY_BLOCK_ENTITY, pos, state);
     }
-
+    
     public void setSource(@NotNull DisplaySource source) {
         Objects.requireNonNull(source);
         this.source = source;
         this.markRenderDataSourceDirty();
         this.markDirty();
     }
-
+    
     @NotNull
     public DisplaySource getSource() {
-        if (removed || source == null) {
-            return new fr.theorozier.webstreamer.display.source.RawDisplaySource(); // returns null URI
-        }
         return source;
     }
-
+    
     /**
      * Reset the internal source URI, that is currently used with Twitch sources in order
      * to reset the channels' cache. This also mark the render data as dirty in order to
@@ -105,170 +74,113 @@ public class DisplayBlockEntity extends BlockEntity {
         this.audioVolume = volume;
         this.markDirty();
     }
-
+    
     public float getAudioDistance() {
         return audioDistance;
     }
-
+    
     public float getAudioVolume() {
         return audioVolume;
     }
-
-    public void setOffset(double offsetX, double offsetY, double offsetZ) {
-        this.offsetX = offsetX;
-        this.offsetY = offsetY;
-        this.offsetZ = offsetZ;
-        this.markDirty();
-    }
-
-    public double getOffsetX() {
-        return offsetX;
-    }
-
-    public double getOffsetY() {
-        return offsetY;
-    }
-
-    public double getOffsetZ() {
-        return offsetZ;
-    }
-
-    public boolean requiresOp() {
-        return requiresOp;
-    }
-
-    public void setRequiresOp(boolean requiresOp) {
-        this.requiresOp = requiresOp;
-        this.markDirty();
-    }
-
+    
     @Override
     protected void writeNbt(NbtCompound nbt) {
-
+        
         super.writeNbt(nbt);
-
+        
         NbtCompound displayNbt = new NbtCompound();
         nbt.put("display", displayNbt);
-
+    
         displayNbt.putFloat("width", this.width);
         displayNbt.putFloat("height", this.height);
         displayNbt.putFloat("audioDistance", this.audioDistance);
         displayNbt.putFloat("audioVolume", this.audioVolume);
-        displayNbt.putDouble("offsetX", this.offsetX);
-        displayNbt.putDouble("offsetY", this.offsetY);
-        displayNbt.putDouble("offsetZ", this.offsetZ);
-        displayNbt.putBoolean("requiresOp", this.requiresOp);
-
+        
         if (this.source != null) {
             displayNbt.putString("type", this.source.getType());
             this.source.writeNbt(displayNbt);
         } else {
             displayNbt.putString("type", "");
         }
-
+    
     }
 
     @Override
     public void readNbt(NbtCompound nbt) {
-
+        
         super.readNbt(nbt);
-
+        
         if (nbt.get("display") instanceof NbtCompound displayNbt) {
-
+    
             if (displayNbt.get("width") instanceof NbtFloat width) {
                 this.width = width.floatValue();
             } else {
                 this.width = 1;
             }
-
+            
             if (displayNbt.get("height") instanceof NbtFloat height) {
                 this.height = height.floatValue();
             } else {
                 this.height = 1;
             }
-
+            
             if (displayNbt.get("audioDistance") instanceof NbtFloat audioDistance) {
                 this.audioDistance = audioDistance.floatValue();
             } else {
                 this.audioDistance = 10f;
             }
-
+            
             if (displayNbt.get("audioVolume") instanceof NbtFloat audioVolume) {
                 this.audioVolume = audioVolume.floatValue();
             } else {
                 this.audioVolume = 1f;
             }
-
-            if (displayNbt.get("offsetX") instanceof NbtDouble offsetX) {
-                this.offsetX = offsetX.doubleValue();
-            } else {
-                this.offsetX = 0.0;
-            }
-
-            if (displayNbt.get("offsetY") instanceof NbtDouble offsetY) {
-                this.offsetY = offsetY.doubleValue();
-            } else {
-                this.offsetY = 0.0;
-            }
-
-            if (displayNbt.get("offsetZ") instanceof NbtDouble offsetZ) {
-                this.offsetZ = offsetZ.doubleValue();
-            } else {
-                this.offsetZ = 0.0;
-            }
-
-            if (displayNbt.get("requiresOp") instanceof net.minecraft.nbt.NbtByte requiresOp) {
-                this.requiresOp = requiresOp.byteValue() != 0;
-            } else {
-                this.requiresOp = false;
-            }
-
+    
             if (displayNbt.get("type") instanceof NbtString type) {
                 this.source = DisplaySource.newSourceFromType(type.asString());
                 this.source.readNbt(displayNbt);
             } else {
                 this.source = new RawDisplaySource();
             }
-
+            
             this.markRenderDataSourceDirty();
-
+    
         }
-
+        
     }
-
+    
     @Nullable
     @Override
     public Packet<ClientPlayPacketListener> toUpdatePacket() {
         return BlockEntityUpdateS2CPacket.create(this);
     }
-
+    
     @Override
     public NbtCompound toInitialChunkDataNbt() {
         return createNbt();
     }
-
+    
     /** Utility method to make a log message prefixed by this display's position. */
     public String makeLog(String message) {
         return "[" + this.pos.getX() + "/" + this.pos.getY() + "/" + this.pos.getZ() + "] " + message;
     }
-
+    
     /*
      * == RENDER DATA
-     *
+     * 
      * The render data is present on both server and client side, but is only actually
      * used on client side for storing the display render data.
      */
-
+    
     private final Object cachedRenderDataGuard = new Object();
     private Object cachedRenderData;
-
+    
     /**
      * <b>Should only be called from client side.</b>
-     *
+     * 
      * @return A <code>DisplayRenderData</code> class, only valid on client side.
      */
     public Object getRenderData() {
-        if (removed) return null;
         synchronized (this.cachedRenderDataGuard) {
             if (this.cachedRenderData == null) {
                 this.cachedRenderData = new fr.theorozier.webstreamer.display.render.DisplayRenderData(this);
@@ -276,7 +188,7 @@ public class DisplayBlockEntity extends BlockEntity {
             return this.cachedRenderData;
         }
     }
-
+    
     /**
      * This internal method is used to mark internal render data URL as dirty.
      * This might be used from any side and is thread-safe.
@@ -290,5 +202,5 @@ public class DisplayBlockEntity extends BlockEntity {
             }
         }
     }
-
+    
 }
