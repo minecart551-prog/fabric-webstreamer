@@ -77,8 +77,10 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     @Override
     public boolean cleanup(long now) {
         if (super.cleanup(now)) {
+            this.setInRange(false); // Mark as out of range so tick/logging stops immediately
             this.destroyed = true;
             this.stopGrabber();
+            this.audioSource.stop(); // Ensure audio is stopped immediately
             this.audioSource.free();
             return true;
         }
@@ -96,6 +98,9 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
     @Override
     public void pushAudioSource(Vec3i pos, float dist, float audioDistance, float audioVolume) {
+        if (this.destroyed) {
+            return;
+        }
         this.audioInRange = audioDistance > 0f && dist <= audioDistance;
         if (!this.audioInRange) {
             WebStreamerMod.LOGGER.info(makeLog("audioInRange=false dist={} max={}"), dist, audioDistance);
@@ -123,6 +128,9 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
      * FFmpeg on the local path, bypassing FFmpeg's HTTPS stack entirely.
      */
     private void startGrabberAsync() {
+        if (this.destroyed) {
+            return;
+        }
         Path tmp = null;
         ShortBuffer audioBuf = this.res.allocAudioBuffer();
         if (this.destroyed) {
@@ -236,6 +244,14 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
     @Override
     public void tick() {
+        if (this.destroyed) {
+            return;
+        }
+
+        // Prevent any ticking if destroyed (extra guard)
+        if (this.destroyed) {
+            return;
+        }
 
         this.lastUse = System.nanoTime();
 

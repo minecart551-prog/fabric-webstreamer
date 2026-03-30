@@ -62,6 +62,12 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
     @Override
     public void render(DisplayBlockEntity entity, float tickDelta, MatrixStack matrices, VertexConsumerProvider vertexConsumers, int light, int overlay) {
 
+
+        // If the block entity is removed, world is null, or the block is no longer a DisplayBlock, skip rendering and layer logic
+        if (entity.getWorld() == null || entity.isRemoved() || !(entity.getWorld().getBlockState(entity.getPos()).getBlock() instanceof DisplayBlock)) {
+            return;
+        }
+
         boolean isTV = isTVBlock(entity.getCachedState().getBlock());
 
         // Get the render data from the block entity, this is just an extension to the
@@ -69,8 +75,8 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
         // last as long as the block entity.
         DisplayRenderData renderData = (DisplayRenderData) entity.getRenderData();
         if (renderData == null) {
-            // If we are running on client side, we should NEVER get here.
-            throw new IllegalStateException("null render data on client side is a programming error");
+            // Block entity is removed or invalid, skip rendering
+            return;
         }
 
         DisplayLayerManager layerManager = WebStreamerClientMod.DISPLAY_LAYERS;
@@ -79,6 +85,10 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
         // Asynchronously get the URI of this display, if the URI is not yet available,
         // null is just returned.
         URI uri = renderData.getUri(layerManager.getResources().getExecutor());
+        if (uri == null) {
+            // No valid URI, skip rendering
+            return;
+        }
 
         // If the player is currently holding a display item, we draw the outline shape
         // of the display block, we also display as status text the source status.
@@ -185,6 +195,10 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
                 boolean inRange = !(audioDistance > 0f && playerDist > audioDistance);
 
                 DisplayLayer layer = layerManager.getLayer(new DisplayLayerNode.Key(uri, entity));
+                if (layer == null) {
+                    matrices.pop();
+                    return;
+                }
                 if (layer instanceof DisplayLayerSimple simpleLayer) {
                     simpleLayer.setInRange(inRange);
                 }

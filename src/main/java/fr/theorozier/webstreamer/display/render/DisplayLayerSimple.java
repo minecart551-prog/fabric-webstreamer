@@ -36,8 +36,16 @@ public abstract class DisplayLayerSimple implements DisplayLayerNode, DisplayLay
 	/** Whether this layer is currently in range for ticking/rendering. */
 	private boolean inRange = true;
 
+	// Allow subclasses and this class to check destroyed state
+	protected boolean destroyed = false;
+
+
 	public void setInRange(boolean inRange) {
 		this.inRange = inRange;
+	}
+
+	public boolean isDestroyed() {
+		return destroyed;
 	}
 
 	public boolean isInRange() {

@@ -1,3 +1,5 @@
+
+
 package fr.theorozier.webstreamer.display;
 
 import fr.theorozier.webstreamer.WebStreamerMod;
@@ -23,6 +25,20 @@ import java.util.Objects;
  * {@link DisplaySource}, size and audio configuration.</p>
  */
 public class DisplayBlockEntity extends BlockEntity {
+
+    private boolean removed = false;
+    // ...existing code...
+
+    @Override
+    public void markRemoved() {
+        super.markRemoved();
+        // Only mark as removed and clear references; let the renderer/layer manager handle cleanup on the correct thread.
+        this.removed = true;
+        this.source = null;
+        synchronized (this.cachedRenderDataGuard) {
+            this.cachedRenderData = null;
+        }
+    }
 
     private DisplaySource source = new RawDisplaySource();
     private float width = 1;
@@ -51,6 +67,9 @@ public class DisplayBlockEntity extends BlockEntity {
 
     @NotNull
     public DisplaySource getSource() {
+        if (removed || source == null) {
+            return new fr.theorozier.webstreamer.display.source.RawDisplaySource(); // returns null URI
+        }
         return source;
     }
 
@@ -246,6 +265,7 @@ public class DisplayBlockEntity extends BlockEntity {
      * @return A <code>DisplayRenderData</code> class, only valid on client side.
      */
     public Object getRenderData() {
+        if (removed) return null;
         synchronized (this.cachedRenderDataGuard) {
             if (this.cachedRenderData == null) {
                 this.cachedRenderData = new fr.theorozier.webstreamer.display.render.DisplayRenderData(this);

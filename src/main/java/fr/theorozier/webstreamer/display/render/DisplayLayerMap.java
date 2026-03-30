@@ -30,7 +30,8 @@ public abstract class DisplayLayerMap<K> implements DisplayLayerNode {
 
     @Override
     public boolean cleanup(long now) {
-        this.layers.values().removeIf(layer -> layer.cleanup(now));
+        // Remove layers that return true from cleanup()
+        this.layers.entrySet().removeIf(entry -> entry.getValue().cleanup(now));
         return this.layers.isEmpty();
     }
 
@@ -43,9 +44,19 @@ public abstract class DisplayLayerMap<K> implements DisplayLayerNode {
     public DisplayLayer getLayer(Key key) throws OutOfLayerException, UnknownFormatException {
         K layerKey = this.getLayerKey(key);
         DisplayLayerNode layer = this.layers.get(layerKey);
+        // Remove and do not return destroyed layers
+        if (layer instanceof DisplayLayerSimple simpleLayer && simpleLayer.isDestroyed()) {
+            this.layers.remove(layerKey);
+            return null;
+        }
         if (layer == null) {
             layer = this.getNewLayer(key);
             this.layers.put(layerKey, layer);
+        }
+        // If the new layer is destroyed (shouldn't happen, but guard), do not return it
+        if (layer instanceof DisplayLayerSimple simpleLayer2 && simpleLayer2.isDestroyed()) {
+            this.layers.remove(layerKey);
+            return null;
         }
         return layer.getLayer(key);
     }
