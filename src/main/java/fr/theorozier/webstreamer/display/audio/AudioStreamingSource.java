@@ -13,6 +13,17 @@ import static org.lwjgl.openal.AL11.*;
 @Environment(EnvType.CLIENT)
 public class AudioStreamingSource {
 
+	/** Pause the audio source. */
+	public void pause() {
+		this.checkValid();
+		alSourcePause(this.sourceId);
+	}
+
+	/** Resume the audio source from a specific timestamp. */
+	public void playFromTimestamp(long timestamp) {
+		this.playFrom(timestamp);
+	}
+
 	private final String name;
 	private int sourceId;
 	

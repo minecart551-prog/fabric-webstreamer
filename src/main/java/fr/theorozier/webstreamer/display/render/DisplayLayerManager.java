@@ -11,7 +11,7 @@ import java.net.URI;
  * This class is responsible for caching and keeping the number of layer to the minimum.
  */
 @Environment(EnvType.CLIENT)
-public class DisplayLayerManager extends DisplayLayerMap<URI> {
+public class DisplayLayerManager extends DisplayLayerMap<DisplayLayerNode.Key> {
 
     /** Max cost for concurrent layers. */
     private static final int MAX_LAYERS_COST = 20 * 30;  // Approx 20 HLS layers.
@@ -51,8 +51,8 @@ public class DisplayLayerManager extends DisplayLayerMap<URI> {
 
     @Override
     @NotNull
-    protected URI getLayerKey(Key key) {
-        return key.uri();
+    protected DisplayLayerNode.Key getLayerKey(Key key) {
+        return key;
     }
 
     @Override

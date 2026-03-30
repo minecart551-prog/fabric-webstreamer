@@ -32,15 +32,36 @@ public class DisplayBlockEntity extends BlockEntity {
     @Override
     public void markRemoved() {
         super.markRemoved();
-        this.removed = true;
-        this.source = null;
+
+        Object renderDataObj;
         synchronized (this.cachedRenderDataGuard) {
+            renderDataObj = this.cachedRenderData;
             this.cachedRenderData = null;
         }
-        // --- WaterFramesFabric-style cleanup: force layer cleanup to stop video/audio and delete temp files ---
+
+        DisplaySource currentSource = this.source;
+        this.source = null;
+
+        // Only clean up the layer for this block, not all layers
         if (net.fabricmc.api.EnvType.CLIENT == net.fabricmc.loader.api.FabricLoader.getInstance().getEnvironmentType()) {
-            fr.theorozier.webstreamer.WebStreamerClientMod.DISPLAY_LAYERS.cleanup(0L); // 0L = force cleanup
+            java.net.URI uri = null;
+            if (renderDataObj instanceof fr.theorozier.webstreamer.display.render.DisplayRenderData renderData) {
+                uri = renderData.getUri(fr.theorozier.webstreamer.WebStreamerClientMod.DISPLAY_LAYERS.getResources().getExecutor());
+            }
+            if (uri == null && currentSource != null) {
+                uri = currentSource.getUri();
+            }
+            if (uri != null) {
+                try {
+                    fr.theorozier.webstreamer.display.render.DisplayLayerNode.Key key = new fr.theorozier.webstreamer.display.render.DisplayLayerNode.Key(uri, this);
+                    fr.theorozier.webstreamer.WebStreamerClientMod.DISPLAY_LAYERS.cleanupKey(key, 0L);
+                } catch (Exception e) {
+                    // Ignore errors (e.g., OutOfLayerException, UnknownFormatException)
+                }
+            }
         }
+
+        this.removed = true;
     }
 
     private DisplaySource source = new RawDisplaySource();

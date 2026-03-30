@@ -6,6 +6,7 @@ package fr.theorozier.webstreamer.display.render;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.HashMap;
+import java.util.function.Predicate;
 
 /**
  * A special, yet abstract, display layer node that contains multiple layers, mapped
@@ -33,6 +34,15 @@ public abstract class DisplayLayerMap<K> implements DisplayLayerNode {
         // Remove layers that return true from cleanup()
         this.layers.entrySet().removeIf(entry -> entry.getValue().cleanup(now));
         return this.layers.isEmpty();
+    }
+
+    public boolean cleanupKey(K key, long now) {
+        DisplayLayerNode layer = this.layers.get(key);
+        if (layer != null && layer.cleanup(now)) {
+            this.layers.remove(key);
+            return true;
+        }
+        return false;
     }
 
     @Override

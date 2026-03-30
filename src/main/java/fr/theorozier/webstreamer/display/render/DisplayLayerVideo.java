@@ -32,6 +32,11 @@ import java.time.Duration;
  */
 @Environment(EnvType.CLIENT)
 public class DisplayLayerVideo extends DisplayLayerSimple {
+    // Pause state
+    private boolean paused = false;
+
+    // Store the playhead position (in microseconds) when paused
+    private long pausedPlaybackMicros = 0;
 
     private static final int MAX_FAILED_GRABS = 5;
     private static final String USER_AGENT =
@@ -80,8 +85,10 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             this.setInRange(false); // Mark as out of range so tick/logging stops immediately
             this.destroyed = true;
             this.stopGrabber();
-            this.audioSource.stop(); // Ensure audio is stopped immediately
-            this.audioSource.free();
+            if (this.audioSource.isValid()) {
+                this.audioSource.stop(); // Ensure audio is stopped immediately
+                this.audioSource.free();
+            }
             return true;
         }
         return false;
@@ -298,14 +305,19 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         }
 
         try {
-            // Stop audio if the player is currently out of range
-            if (!this.audioInRange && this.audioSource.isPlaying()) {
-                this.audioSource.stop();
-            }
-
-            // If out of range, do not tick audio or video at all
+            // If out of range, pause video/audio and store playhead
             if (!this.audioInRange) {
+                if (!this.paused) {
+                    this.paused = true;
+                    this.pausedPlaybackMicros = this.playbackMicros;
+                    this.audioSource.pause();
+                }
                 return;
+            } else if (this.paused) {
+                // Resume from paused state
+                this.paused = false;
+                this.playbackMicros = this.pausedPlaybackMicros;
+                this.audioSource.playFromTimestamp(this.refTimestamp + this.playbackMicros);
             }
 
             // Display the buffered frame if it's ready
