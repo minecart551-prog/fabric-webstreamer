@@ -56,19 +56,22 @@ public class TwitchDisplaySource extends DisplaySource {
             try {
                 Playlist playlist = WebStreamerClientMod.TWITCH_CLIENT.requestPlaylist(this.channel);
                 PlaylistQuality quality = playlist.getQuality(this.quality);
+                if (quality == null) {
+                    return null;
+                }
                 return quality.uri();
             } catch (TwitchClient.PlaylistException e) {
-                WebStreamerMod.LOGGER.error("Failed to request twitch channel", e);
+                return null;
             }
+        } else {
+            return null;
         }
-        return null;
     }
     
     @Override
     public void resetUri() {
         if (this.channel != null) {
             WebStreamerClientMod.TWITCH_CLIENT.forgetPlaylist(this.channel);
-            WebStreamerMod.LOGGER.info("Forget twitch playlist for channel " + this.channel);
         }
     }
     

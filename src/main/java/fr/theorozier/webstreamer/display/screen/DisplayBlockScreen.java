@@ -195,7 +195,7 @@ public class DisplayBlockScreen extends Screen {
             this.sourceType = SourceType.YOUTUBE;
             if (source instanceof TwitchDisplaySource) {
                 this.sourceType = SourceType.TWITCH;
-            } else if (source instanceof RawDisplaySource) {
+            } else if (source instanceof RawDisplaySource rawSource && rawSource.getUri() != null) {
                 this.sourceType = SourceType.RAW;
             }
         }

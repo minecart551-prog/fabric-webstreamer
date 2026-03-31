@@ -60,8 +60,9 @@ public class FrameGrabber {
 
 			HttpRequest req = HttpRequest.newBuilder(this.uri).GET().timeout(Duration.ofSeconds(10)).build();
 			this.buffer = this.pools.allocRawFileBuffer();
+			this.tempAudioBuffer = this.pools.allocAudioBuffer();
 			this.pools.getHttpClient().send(req, info -> new BufferResponseSubscriber(this.buffer));
-			
+
 			// Validate buffer has data
 			if (this.buffer.remaining() == 0) {
 				throw new IOException("Downloaded segment is empty or download failed");
@@ -72,7 +73,7 @@ public class FrameGrabber {
 			this.grabber = new FFmpegFrameGrabber(grabberStream);
 			this.grabber.startUnsafe();
 
-            AudioStreamingBuffer.resetTimestampTracker();
+			AudioStreamingBuffer.resetTimestampTracker();
 
 			this.deltaTimestamp = 0L;
 			this.lastFrame = null;

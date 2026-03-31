@@ -64,9 +64,9 @@ public class DisplayRenderData {
 			try {
 				this.uri = this.futureUri.get();
 			} catch (InterruptedException | CancellationException e) {
-				// Cancel should not happen.
+				this.sourceDirty = true;
 			} catch (ExecutionException e) {
-				WebStreamerMod.LOGGER.warn(this.display.makeLog("Error caching display URI."), e);
+				this.sourceDirty = true;
 			} finally {
 				this.futureUri = null;
 			}

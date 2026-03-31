@@ -130,11 +130,9 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 	public void pushAudioSource(Vec3i pos, float dist, float audioDistance, float audioVolume) {
         this.audioInRange = audioDistance > 0f && dist <= audioDistance;
         if (!this.audioInRange) {
-            WebStreamerMod.LOGGER.info(makeLog("audioInRange=false dist={} max={}"), dist, audioDistance);
             if (this.audioSource.isPlaying()) {
-                WebStreamerMod.LOGGER.info(makeLog("Player out of audio range dist={} max={}, stopping audio source"), dist, audioDistance);
+                this.audioSource.stop();
             }
-            this.audioSource.stop();
             return;
         }
 
@@ -176,27 +174,26 @@ public class DisplayLayerHls extends DisplayLayerSimple {
  
 	/** Internal blocking method to request the playlist. */
     private MediaPlaylist requestPlaylistBlocking(URI uri) throws IOException {
-		try {
-			HttpRequest request = HttpRequest.newBuilder(uri).GET().timeout(Duration.ofSeconds(5)).build();
-			HttpResponse<Stream<String>> res = this.res.getHttpClient()
-					.send(request, HttpResponse.BodyHandlers.ofLines());
-			if (res.statusCode() == 200) {
-				return this.hlsParser.readPlaylist(res.body().iterator());
-			} else {
-				throw new IOException("HTTP request failed, status code: " + res.statusCode());
-			}
-		} catch (InterruptedException e) {
-			throw new IOException(e);
-		}
+        try {
+            HttpRequest request = HttpRequest.newBuilder(uri).GET().timeout(Duration.ofSeconds(5)).build();
+            HttpResponse<Stream<String>> res = this.res.getHttpClient()
+                    .send(request, HttpResponse.BodyHandlers.ofLines());
+            if (res.statusCode() == 200) {
+                return this.hlsParser.readPlaylist(res.body().iterator());
+            }
+            throw new IOException("HTTP request failed, status code: " + res.statusCode());
+        } catch (InterruptedException e) {
+            throw new IOException(e);
+        }
     }
 
 	private void resetPlaylist() {
 		this.playlistSegments = null;
+		this.playlistOffset = 0;
 		this.playlistNextRequestTimestamp = 0;
 		this.playlistRequestInterval = INITIAL_PLAYLIST_REQUEST_INTERVAL;
 	}
-	
-	/** Request the playlist if not already requesting and if this request is not pointless. */
+
 	private void requestPlaylist(long now) {
 		if (now >= this.playlistNextRequestTimestamp) {
 			this.asyncPlaylist.push(this.uri);

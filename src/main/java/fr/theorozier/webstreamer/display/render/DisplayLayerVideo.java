@@ -168,7 +168,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             this.res.freeAudioBuffer(audioBuf);
             return;
         }
-        WebStreamerMod.LOGGER.info(makeLog("Starting direct video grabber, uri={}"), this.uri);
         try {
 
             // Reset audio timestamp tracker for new video
@@ -226,7 +225,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             this.lastTickNanos   = System.nanoTime();
             this.grabberReady    = true;
             this.grabberPending  = false;
-            WebStreamerMod.LOGGER.info(makeLog("Direct video grabber ready, first frame ts={} usec"), firstFrameTimestamp);
 
         } catch (Exception e) {
             WebStreamerMod.LOGGER.error(makeLog("Failed to start direct video grabber."), e);
@@ -238,11 +236,10 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     }
 
     private void stopGrabber() {
-        // Only stop and log if grabber is actually running or pending
+        // Only stop if grabber is actually running or pending
         if (!this.grabberReady && !this.grabberPending) {
             return;
         }
-        WebStreamerMod.LOGGER.info(makeLog("Stopping grabber, grabberReady={} grabberPending={}"), this.grabberReady, this.grabberPending);
         if (this.grabber != null) {
             try { this.grabber.releaseUnsafe(); } catch (Exception ignored) { }
             this.grabber = null;
@@ -300,7 +297,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
         // Submit the download+start task once to the executor.
         if (!this.grabberPending && !this.grabberReady) {
-            WebStreamerMod.LOGGER.info(makeLog("Requesting grabber start."));
             this.grabberPending = true;
             this.res.getExecutor().submit(this::startGrabberAsync);
             return;
