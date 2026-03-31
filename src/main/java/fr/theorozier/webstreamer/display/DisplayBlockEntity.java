@@ -3,6 +3,7 @@
 package fr.theorozier.webstreamer.display;
 
 import fr.theorozier.webstreamer.WebStreamerMod;
+import fr.theorozier.webstreamer.display.WebDisplayPBlock;
 import fr.theorozier.webstreamer.display.source.DisplaySource;
 import fr.theorozier.webstreamer.display.source.RawDisplaySource;
 import net.minecraft.block.BlockState;
@@ -109,6 +110,10 @@ public class DisplayBlockEntity extends BlockEntity {
     }
 
     public void setSize(float width, float height) {
+        if (this.getCachedState().getBlock() instanceof WebDisplayPBlock) {
+            width = Math.min(width, WebDisplayPBlock.MAX_SIZE);
+            height = Math.min(height, WebDisplayPBlock.MAX_SIZE);
+        }
         this.width = width;
         this.height = height;
         this.markDirty();
@@ -137,6 +142,11 @@ public class DisplayBlockEntity extends BlockEntity {
     }
 
     public void setOffset(double offsetX, double offsetY, double offsetZ) {
+        if (this.getCachedState().getBlock() instanceof WebDisplayPBlock) {
+            offsetX = Math.max(-WebDisplayPBlock.MAX_OFFSET, Math.min(WebDisplayPBlock.MAX_OFFSET, offsetX));
+            offsetY = Math.max(-WebDisplayPBlock.MAX_OFFSET, Math.min(WebDisplayPBlock.MAX_OFFSET, offsetY));
+            offsetZ = Math.max(-WebDisplayPBlock.MAX_OFFSET, Math.min(WebDisplayPBlock.MAX_OFFSET, offsetZ));
+        }
         this.offsetX = offsetX;
         this.offsetY = offsetY;
         this.offsetZ = offsetZ;

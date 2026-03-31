@@ -7,6 +7,7 @@ import fr.theorozier.webstreamer.display.TVBlock;
 import fr.theorozier.webstreamer.display.TVBlockEntity;
 import fr.theorozier.webstreamer.display.BigTVBlock;
 import fr.theorozier.webstreamer.display.BigTVBlockEntity;
+import fr.theorozier.webstreamer.display.WebDisplayPBlock;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.item.v1.FabricItemSettings;
@@ -29,7 +30,9 @@ public class WebStreamerMod implements ModInitializer {
     public static final String MOD_ID = "webstreamer";
 
     public static Block DISPLAY_BLOCK;
+    public static Block DISPLAY_P_BLOCK;
     public static BlockItem DISPLAY_ITEM;
+    public static BlockItem DISPLAY_P_ITEM;
     public static BlockEntityType<DisplayBlockEntity> DISPLAY_BLOCK_ENTITY;
 
     public static Block TV_BLOCK;
@@ -46,11 +49,15 @@ public class WebStreamerMod implements ModInitializer {
     public void onInitialize() {
 
         DISPLAY_BLOCK = new DisplayBlock();
+        DISPLAY_P_BLOCK = new WebDisplayPBlock();
         DISPLAY_ITEM = new BlockItem(DISPLAY_BLOCK, new FabricItemSettings());
+        DISPLAY_P_ITEM = new BlockItem(DISPLAY_P_BLOCK, new FabricItemSettings());
 
         Registry.register(Registries.BLOCK, "webstreamer:display", DISPLAY_BLOCK);
         Registry.register(Registries.ITEM, "webstreamer:display", DISPLAY_ITEM);
-        DISPLAY_BLOCK_ENTITY = Registry.register(Registries.BLOCK_ENTITY_TYPE, "webstreamer:display", FabricBlockEntityTypeBuilder.create(DisplayBlockEntity::new, DISPLAY_BLOCK).build());
+        Registry.register(Registries.BLOCK, "webstreamer:display_p", DISPLAY_P_BLOCK);
+        Registry.register(Registries.ITEM, "webstreamer:display_p", DISPLAY_P_ITEM);
+        DISPLAY_BLOCK_ENTITY = Registry.register(Registries.BLOCK_ENTITY_TYPE, "webstreamer:display", FabricBlockEntityTypeBuilder.create(DisplayBlockEntity::new, DISPLAY_BLOCK, DISPLAY_P_BLOCK).build());
 
         // Register TV blocks
         TV_BLOCK = new TVBlock();
@@ -73,6 +80,7 @@ public class WebStreamerMod implements ModInitializer {
                 .displayName(Text.literal("WebStreamer"))
                 .entries((itemDisplayParameters, entries) -> {
                     entries.add(DISPLAY_ITEM);
+                    entries.add(DISPLAY_P_ITEM);
                     entries.add(TV_ITEM);
                     entries.add(BIG_TV_ITEM);
                 })

@@ -1,5 +1,6 @@
 {
   "block.webstreamer.display": "Afficheur Web",
+  "block.webstreamer.display_p": "Afficheur Web P",
   "gui.webstreamer.display.conf": "Configuration de l'écran",
   "gui.webstreamer.display.width": "Largeur",
   "gui.webstreamer.display.height": "Hauteur",

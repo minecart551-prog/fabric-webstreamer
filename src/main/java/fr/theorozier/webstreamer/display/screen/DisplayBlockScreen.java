@@ -5,6 +5,7 @@ import fr.theorozier.webstreamer.display.BigTVBlockEntity;
 import fr.theorozier.webstreamer.display.DisplayBlockEntity;
 import fr.theorozier.webstreamer.display.DisplayNetworking;
 import fr.theorozier.webstreamer.display.TVBlockEntity;
+import fr.theorozier.webstreamer.display.WebDisplayPBlock;
 import fr.theorozier.webstreamer.display.source.DisplaySource;
 import fr.theorozier.webstreamer.display.source.RawDisplaySource;
 import fr.theorozier.webstreamer.display.source.TwitchDisplaySource;
@@ -498,6 +499,13 @@ public class DisplayBlockScreen extends Screen {
         if (commit) {
 
             if (!this.fixedScaleOffset) {
+                if (this.display.getCachedState().getBlock() instanceof WebDisplayPBlock) {
+                    width = Math.min(width, WebDisplayPBlock.MAX_SIZE);
+                    height = Math.min(height, WebDisplayPBlock.MAX_SIZE);
+                    offsetX = Math.max(-WebDisplayPBlock.MAX_OFFSET, Math.min(WebDisplayPBlock.MAX_OFFSET, offsetX));
+                    offsetY = Math.max(-WebDisplayPBlock.MAX_OFFSET, Math.min(WebDisplayPBlock.MAX_OFFSET, offsetY));
+                    offsetZ = Math.max(-WebDisplayPBlock.MAX_OFFSET, Math.min(WebDisplayPBlock.MAX_OFFSET, offsetZ));
+                }
                 this.display.setSize(width, height);
                 this.display.setOffset(offsetX, offsetY, offsetZ);
             }
