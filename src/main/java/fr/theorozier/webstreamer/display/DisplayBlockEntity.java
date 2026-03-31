@@ -73,6 +73,7 @@ public class DisplayBlockEntity extends BlockEntity {
     private double offsetY = 0.0;
     private double offsetZ = 0.0;
     private boolean requiresOp = false;
+    private boolean playbackPaused = false;
 
     protected DisplayBlockEntity(net.minecraft.block.entity.BlockEntityType<? extends DisplayBlockEntity> type, BlockPos pos, BlockState state) {
         super(type, pos, state);
@@ -163,6 +164,14 @@ public class DisplayBlockEntity extends BlockEntity {
         this.markDirty();
     }
 
+    public boolean isPlaybackPaused() {
+        return this.playbackPaused;
+    }
+
+    public void setPlaybackPaused(boolean playbackPaused) {
+        this.playbackPaused = playbackPaused;
+    }
+
     @Override
     protected void writeNbt(NbtCompound nbt) {
 
@@ -179,6 +188,7 @@ public class DisplayBlockEntity extends BlockEntity {
         displayNbt.putDouble("offsetY", this.offsetY);
         displayNbt.putDouble("offsetZ", this.offsetZ);
         displayNbt.putBoolean("requiresOp", this.requiresOp);
+        displayNbt.putBoolean("playbackPaused", this.playbackPaused);
 
         if (this.source != null) {
             displayNbt.putString("type", this.source.getType());
@@ -242,6 +252,12 @@ public class DisplayBlockEntity extends BlockEntity {
                 this.requiresOp = requiresOp.byteValue() != 0;
             } else {
                 this.requiresOp = false;
+            }
+
+            if (displayNbt.get("playbackPaused") instanceof net.minecraft.nbt.NbtByte playbackPaused) {
+                this.playbackPaused = playbackPaused.byteValue() != 0;
+            } else {
+                this.playbackPaused = false;
             }
 
             if (displayNbt.get("type") instanceof NbtString type) {

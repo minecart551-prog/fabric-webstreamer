@@ -34,6 +34,7 @@ import java.time.Duration;
 public class DisplayLayerVideo extends DisplayLayerSimple {
     // Pause state
     private boolean paused = false;
+    private boolean externalPaused = false;
 
     // Store the playhead position (in microseconds) when paused
     private long pausedPlaybackMicros = 0;
@@ -104,16 +105,38 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     // -------------------------------------------------------------------------
 
     @Override
+    public void setPlaybackPaused(boolean paused) {
+        this.externalPaused = paused;
+        if (paused) {
+            this.pausePlaybackIfNeeded();
+        }
+    }
+
+    @Override
+    public void setInRange(boolean inRange) {
+        super.setInRange(inRange);
+        if (!inRange) {
+            this.pausePlaybackIfNeeded();
+        }
+    }
+
+    private void pausePlaybackIfNeeded() {
+        if (!this.paused) {
+            this.paused = true;
+            this.pausedPlaybackMicros = this.playbackMicros;
+            if (this.audioSource.isPlaying()) {
+                this.audioSource.pause();
+            }
+        }
+    }
+
+    @Override
     public void pushAudioSource(Vec3i pos, float dist, float audioDistance, float audioVolume) {
         if (this.destroyed) {
             return;
         }
         this.audioInRange = audioDistance > 0f && dist <= audioDistance;
         if (!this.audioInRange) {
-            WebStreamerMod.LOGGER.info(makeLog("audioInRange=false dist={} max={}"), dist, audioDistance);
-            if (this.audioSource.isPlaying()) {
-                WebStreamerMod.LOGGER.info(makeLog("Player out of audio range dist={} max={}, stopping audio source"), dist, audioDistance);
-            }
             this.audioSource.stop();
             return;
         }
@@ -287,12 +310,14 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
         // Advance playback clock by wall-clock elapsed time.
         long now = System.nanoTime();
-        if (this.lastTickNanos > 0) {
+
+        boolean shouldPause = !this.audioInRange || this.externalPaused;
+        if (this.lastTickNanos > 0 && !shouldPause) {
             this.playbackMicros += (now - this.lastTickNanos) / 1000L;
         }
         this.lastTickNanos = now;
 
-        if (this.audioSource != null && this.audioSource.isPlaying() && this.refTimestamp >= 0) {
+        if (this.audioSource != null && this.audioSource.isPlaying() && this.refTimestamp >= 0 && !shouldPause) {
             long audioTs = this.audioSource.getEstimatedPlaybackTimestamp();
             if (audioTs > 0) {
                 long audioRelative = audioTs - this.refTimestamp;
@@ -305,8 +330,8 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         }
 
         try {
-            // If out of range, pause video/audio and store playhead
-            if (!this.audioInRange) {
+            // Pause video/audio when out of range or when global playback is paused.
+            if (shouldPause) {
                 if (!this.paused) {
                     this.paused = true;
                     this.pausedPlaybackMicros = this.playbackMicros;
@@ -314,10 +339,12 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 }
                 return;
             } else if (this.paused) {
-                // Resume from paused state
+                // Resume from paused state.
                 this.paused = false;
                 this.playbackMicros = this.pausedPlaybackMicros;
-                this.audioSource.playFromTimestamp(this.refTimestamp + this.playbackMicros);
+                if (this.audioInRange) {
+                    this.audioSource.playFromTimestamp(this.refTimestamp + this.playbackMicros);
+                }
             }
 
             // Display the buffered frame if it's ready
@@ -330,7 +357,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                     this.audioSource.playFrom(this.lastFrame.timestamp);
                     this.failedGrabs = 0;
                     this.lastFrame = null;
-                    WebStreamerMod.LOGGER.info(makeLog("Displayed buffered frame at ts={}"), realTimestamp);
+                    WebStreamerMod.LOGGER.debug(makeLog("Displayed buffered frame at ts={}"), realTimestamp);
                 } else {
                     // Buffered frame not ready yet, don't grab more
                     return;
@@ -374,9 +401,9 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
             if (framesDisplayed > 0 || audioBuffersQueued > 0) {
                 if (framesDisplayed == 0 && audioBuffersQueued > 0) {
-                    WebStreamerMod.LOGGER.warn(makeLog("Audio only tick: audioQueued={} playbackMicros={} queuedFrames={}"), audioBuffersQueued, this.playbackMicros, this.lastFrame != null ? this.lastFrame.timestamp - this.refTimestamp : -1L);
+                    WebStreamerMod.LOGGER.debug(makeLog("Audio only tick: audioQueued={} playbackMicros={} queuedFrames={}"), audioBuffersQueued, this.playbackMicros, this.lastFrame != null ? this.lastFrame.timestamp - this.refTimestamp : -1L);
                 } else {
-                    WebStreamerMod.LOGGER.info(makeLog("tick result: framesDisplayed={} audioQueued={}"), framesDisplayed, audioBuffersQueued);
+                    WebStreamerMod.LOGGER.debug(makeLog("tick result: framesDisplayed={} audioQueued={}"), framesDisplayed, audioBuffersQueued);
                 }
             }
 

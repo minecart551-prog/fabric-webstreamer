@@ -208,7 +208,7 @@ public class DisplayBlockScreen extends Screen {
 
         sourceTypeButton = CyclingButtonWidget.builder(SourceType::getText)
                 .values(SourceType.values())
-                .build(xHalf + 136, yTop + 10, 76, 20, SOURCE_TYPE_TEXT, (widget, val) -> {
+                .build(xHalf + 136, yTop + 10, 76, 20, Text.empty(), (widget, val) -> {
                     // When cycling, we reset the UI to adapt for the new source type.
                     if (this.client != null) {
                         this.init(this.client, this.width, this.height);

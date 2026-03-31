@@ -30,4 +30,14 @@ public interface DisplayLayer {
      */
     RenderLayer getRenderLayer();
 
+    /**
+     * Update the playback pause state for this layer.
+     * <p>
+     * This is used by the display block entity to synchronize global pause/resume
+     * state between clients in multiplayer.
+     * </p>
+     */
+    default void setPlaybackPaused(boolean paused) {
+    }
+
 }

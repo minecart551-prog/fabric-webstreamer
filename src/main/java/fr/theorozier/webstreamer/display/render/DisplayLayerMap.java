@@ -21,9 +21,14 @@ public abstract class DisplayLayerMap<K> implements DisplayLayerNode {
 
     @Override
     public void tick() {
-        // Only tick layers that are in range, or all if not a DisplayLayerSimple
+        // Only tick in-range simple layers. Out-of-range layers should preserve
+        // their paused playback state, but not advance or consume resources.
         this.layers.values().forEach(layer -> {
-            if (!(layer instanceof DisplayLayerSimple) || ((DisplayLayerSimple) layer).isInRange()) {
+            if (layer instanceof DisplayLayerSimple simpleLayer) {
+                if (simpleLayer.isInRange()) {
+                    simpleLayer.tick();
+                }
+            } else {
                 layer.tick();
             }
         });

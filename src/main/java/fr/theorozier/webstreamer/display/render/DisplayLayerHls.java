@@ -83,6 +83,7 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 	
 	private final AudioStreamingSource audioSource;
 	private boolean audioInRange = true;
+	private boolean externalPaused = false;
 
 	// Timing //
 	/** Time in nanoseconds (monotonic) of the last internal cleanup. */
@@ -141,8 +142,14 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 		this.audioSource.setAttenuation(audioDistance);
 		this.audioSource.setVolume(audioVolume);
 	}
-	
-	// Playlist //
+
+    @Override
+    public void setPlaybackPaused(boolean paused) {
+        this.externalPaused = paused;
+        if (paused && this.audioSource.isPlaying()) {
+            this.audioSource.stop();
+        }
+    }
 
     /**
      * Return the segment at the given absolute index.
@@ -467,18 +474,23 @@ public class DisplayLayerHls extends DisplayLayerSimple {
         this.profiler.startTick();
         this.profiler.push("tick");
 		
-		if (!this.isLost()) {
-			// Only fetch if this layer is not lost, because if it's lost, it should be
-			// cleaned up soon.
-			try {
-				this.profiler.push("fetch");
-				this.fetch();
-			} catch (IOException e) {
-				WebStreamerMod.LOGGER.error(makeLog("Failed to fetch."), e);
-			} finally {
-				this.profiler.pop();
-			}
-		}
+        if (this.externalPaused || !this.audioInRange) {
+            if (this.audioSource.isPlaying()) {
+                this.audioSource.stop();
+            }
+            this.lastFetchTimestamp = System.nanoTime();
+        } else if (!this.isLost()) {
+            // Only fetch if this layer is not lost, because if it's lost, it should be
+            // cleaned up soon.
+            try {
+                this.profiler.push("fetch");
+                this.fetch();
+            } catch (IOException e) {
+                WebStreamerMod.LOGGER.error(makeLog("Failed to fetch."), e);
+            } finally {
+                this.profiler.pop();
+            }
+        }
 
 		long now = System.nanoTime();
 		boolean cleanup = now - this.lastCleanup >= CLEANUP_INTERVAL;

@@ -4,8 +4,9 @@ import fr.theorozier.webstreamer.WebStreamerClientMod;
 import fr.theorozier.webstreamer.WebStreamerMod;
 import fr.theorozier.webstreamer.display.BigTVBlock;
 import fr.theorozier.webstreamer.display.DisplayBlock;
-import fr.theorozier.webstreamer.display.TVBlock;
 import fr.theorozier.webstreamer.display.DisplayBlockEntity;
+import fr.theorozier.webstreamer.display.DisplayNetworking;
+import fr.theorozier.webstreamer.display.TVBlock;
 import fr.theorozier.webstreamer.mixin.WorldRendererInvoker;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
@@ -25,6 +26,7 @@ import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.shape.VoxelShape;
+import net.minecraft.world.World;
 
 import org.joml.AxisAngle4d;
 import org.joml.Matrix4f;
@@ -194,11 +196,16 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
                 int playerDist = pos.getManhattanDistance(this.gameRenderer.getCamera().getBlockPos());
                 boolean inRange = !(audioDistance > 0f && playerDist > audioDistance);
 
+                if (entity.getWorld() != null && DisplayNetworking.shouldSendPlaybackRangeUpdate(entity.getWorld().getRegistryKey(), pos, inRange)) {
+                    DisplayNetworking.sendPlaybackState(entity, inRange);
+                }
+
                 DisplayLayer layer = layerManager.getLayer(new DisplayLayerNode.Key(uri, entity));
                 if (layer == null) {
                     matrices.pop();
                     return;
                 }
+                layer.setPlaybackPaused(entity.isPlaybackPaused());
                 if (layer instanceof DisplayLayerSimple simpleLayer) {
                     simpleLayer.setInRange(inRange);
                 }

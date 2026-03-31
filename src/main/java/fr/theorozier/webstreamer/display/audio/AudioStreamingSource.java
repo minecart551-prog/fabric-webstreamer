@@ -142,14 +142,14 @@ public class AudioStreamingSource {
 					buffer.shiftTimestamp(shift);
 				}
 				this.lastBufferTimestamp -= shift;
-				WebStreamerMod.LOGGER.info("[{}] Audio timeline normalized by shift={} candidateOffset={} firstBufferTs={} newFirstTs={}", this.name, shift, candidateOffset, firstBufferTs, this.queue.peekFirst().timestamp);
+				WebStreamerMod.LOGGER.debug("[{}] Audio timeline normalized by shift={} candidateOffset={} firstBufferTs={} newFirstTs={}", this.name, shift, candidateOffset, firstBufferTs, this.queue.peekFirst().timestamp);
 			}
 		}
 		int queued = alGetSourcei(this.sourceId, AL_BUFFERS_QUEUED);
 		int processed = alGetSourcei(this.sourceId, AL_BUFFERS_PROCESSED);
 		int state = alGetSourcei(this.sourceId, AL_SOURCE_STATE);
 		long lead = this.queue.isEmpty() ? 0 : this.queue.peekFirst().timestamp - timestamp;
-		WebStreamerMod.LOGGER.info("[{}] Audio playFrom called timestamp={} playing={} state={} queueSize={} queued={} processed={} lead={}us", this.name, timestamp, playing, getStateName(state), this.queue.size(), queued, processed, lead);
+		WebStreamerMod.LOGGER.debug("[{}] Audio playFrom called timestamp={} playing={} state={} queueSize={} queued={} processed={} lead={}us", this.name, timestamp, playing, getStateName(state), this.queue.size(), queued, processed, lead);
 	
 		if (!playing) {
 			this.removeAndFreeBuffersBefore(timestamp);
@@ -166,7 +166,7 @@ public class AudioStreamingSource {
 		AudioStreamingBuffer firstBuffer = this.queue.peekFirst();
 		
 		if (!playing && firstBuffer.timestamp > timestamp) {
-			WebStreamerMod.LOGGER.info("[{}] Audio source waiting for first buffer timestamp={} currentTimestamp={} queueSize={} state={}", this.name, firstBuffer.timestamp, timestamp, this.queue.size(), getStateName(state));
+			WebStreamerMod.LOGGER.debug("[{}] Audio source waiting for first buffer timestamp={} currentTimestamp={} queueSize={} state={}", this.name, firstBuffer.timestamp, timestamp, this.queue.size(), getStateName(state));
 			// If we are not playing, we should only start playing when the first buffer is reached.
 			return;
 		}
@@ -185,14 +185,14 @@ public class AudioStreamingSource {
 		
 		alSourceQueueBuffers(this.sourceId, buffers);
 		int queuedAfter = alGetSourcei(this.sourceId, AL_BUFFERS_QUEUED);
-		WebStreamerMod.LOGGER.info("[{}] Queued {} buffers to source, queuedAfter={} firstBufferTs={} state={}", this.name, buffersCount, queuedAfter, firstBufferTimestamp, getStateName(state));
+		WebStreamerMod.LOGGER.debug("[{}] Queued {} buffers to source, queuedAfter={} firstBufferTs={} state={}", this.name, buffersCount, queuedAfter, firstBufferTimestamp, getStateName(state));
 		
 		if (!playing) {
 			alSourcePlay(this.sourceId);
 			this.playTimestamp = System.nanoTime();
 			this.playBufferTimestamp = firstBufferTimestamp;
 			int stateAfter = alGetSourcei(this.sourceId, AL_SOURCE_STATE);
-			WebStreamerMod.LOGGER.info("[{}] Started OpenAL source, playBufferTimestamp={} stateAfter={}", this.name, this.playBufferTimestamp, getStateName(stateAfter));
+			WebStreamerMod.LOGGER.debug("[{}] Started OpenAL source, playBufferTimestamp={} stateAfter={}", this.name, this.playBufferTimestamp, getStateName(stateAfter));
 		}
 		
 	}
@@ -218,7 +218,7 @@ public class AudioStreamingSource {
 			if (this.timestampOffsetInitialized) {
 				this.timestampOffsetInitialized = false;
 				this.timestampOffset = 0;
-				WebStreamerMod.LOGGER.info("[{}] Audio queue emptied, resetting timestamp offset before new refill", this.name);
+				WebStreamerMod.LOGGER.debug("[{}] Audio queue emptied, resetting timestamp offset before new refill", this.name);
 			}
 			if (this.lastRequestedTimestamp >= 0) {
 				long delta = buffer.timestamp - this.lastRequestedTimestamp;
@@ -227,7 +227,7 @@ public class AudioStreamingSource {
 					this.timestampOffsetInitialized = true;
 					buffer.shiftTimestamp(this.timestampOffset);
 					shifted = true;
-					WebStreamerMod.LOGGER.info("[{}] Audio timeline normalized on first buffer by offset={} delta={} firstBufferTs={} requestedTs={}", this.name, this.timestampOffset, delta, buffer.timestamp, this.lastRequestedTimestamp);
+					WebStreamerMod.LOGGER.debug("[{}] Audio timeline normalized on first buffer by offset={} delta={} firstBufferTs={} requestedTs={}", this.name, this.timestampOffset, delta, buffer.timestamp, this.lastRequestedTimestamp);
 				}
 			}
 		}

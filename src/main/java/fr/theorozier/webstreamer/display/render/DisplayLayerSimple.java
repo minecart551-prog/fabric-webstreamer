@@ -20,9 +20,6 @@ import java.net.URI;
 @Environment(EnvType.CLIENT)
 public abstract class DisplayLayerSimple implements DisplayLayerNode, DisplayLayer {
 	
-	/** The timeout for a layer to be considered unused */
-	protected static final long LAYER_UNUSED_TIMEOUT = 3L * 1000000000L;
-	
 	// Common //
 	protected final URI uri;
 	protected final DisplayLayerResources res;
@@ -62,7 +59,9 @@ public abstract class DisplayLayerSimple implements DisplayLayerNode, DisplayLay
 
 	@Override
 	public boolean cleanup(long now) {
-		if (now == 0 || now - this.lastUse >= LAYER_UNUSED_TIMEOUT) {
+		// Only release resources on forced cleanup (now == 0), such as when the
+		// client world is unloaded or the player disconnects.
+		if (now == 0) {
 			this.tex.clearGlId();
 			return true;
 		} else {
