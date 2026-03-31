@@ -191,11 +191,11 @@ public class DisplayBlockScreen extends Screen {
 
         DisplaySource source = this.display.getSource();
         if (this.sourceType == null) {
-            this.sourceType = SourceType.RAW;
+            this.sourceType = SourceType.YOUTUBE;
             if (source instanceof TwitchDisplaySource) {
                 this.sourceType = SourceType.TWITCH;
-            } else if (source instanceof YoutubeDisplaySource) {
-                this.sourceType = SourceType.YOUTUBE;
+            } else if (source instanceof RawDisplaySource) {
+                this.sourceType = SourceType.RAW;
             }
         }
 
@@ -602,9 +602,9 @@ public class DisplayBlockScreen extends Screen {
      */
     private enum SourceType {
 
-        RAW(SOURCE_TYPE_RAW_TEXT),
+        YOUTUBE(SOURCE_TYPE_YOUTUBE_TEXT),
         TWITCH(SOURCE_TYPE_TWITCH_TEXT),
-        YOUTUBE(SOURCE_TYPE_YOUTUBE_TEXT);
+        RAW(SOURCE_TYPE_RAW_TEXT);
 
         private final Text text;
         SourceType(Text text) {
