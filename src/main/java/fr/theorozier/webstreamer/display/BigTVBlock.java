@@ -27,18 +27,10 @@ public class BigTVBlock extends DisplayBlock {
 
     @Override
     public VoxelShape getOutlineShape(BlockState state, BlockView world, BlockPos pos, ShapeContext context) {
-        Direction attachment = state.get(PROP_ATTACHMENT);
-        Direction facing = state.get(PROP_FACING);
-        if (attachment == Direction.UP || attachment == Direction.DOWN) {
-            // For BigTVs on floor/ceiling, use wall shape to make outline thin in depth
-            return switch (facing) {
-                case NORTH -> SHAPE_NORTH;
-                case SOUTH -> SHAPE_SOUTH;
-                case EAST -> SHAPE_EAST;
-                case WEST -> SHAPE_WEST;
-                default -> SHAPE_FLOOR;
-            };
+        if (!(world.getBlockEntity(pos) instanceof DisplayBlockEntity displayEntity)) {
+            return super.getOutlineShape(state, world, pos, context);
         }
-        return super.getOutlineShape(state, world, pos, context);
+
+        return createDynamicOutlineShape(state, displayEntity);
     }
 }

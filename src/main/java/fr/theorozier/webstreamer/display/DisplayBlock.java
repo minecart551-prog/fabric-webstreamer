@@ -107,8 +107,9 @@ public class DisplayBlock extends BlockWithEntity {
     @Override
     public VoxelShape getOutlineShape(BlockState state, BlockView world, BlockPos pos, ShapeContext context) {
         if (world.getBlockEntity(pos) instanceof DisplayBlockEntity displayEntity) {
-            // TV/BigTV and customized display blocks have dynamic width/height and offset.
-            if (displayEntity.getWidth() != 1.0f || displayEntity.getHeight() != 1.0f || state.getBlock() instanceof TVBlock) {
+            // Customized display blocks have dynamic width/height and offset. TV blocks use fixed model hitboxes.
+            if ((displayEntity.getWidth() != 1.0f || displayEntity.getHeight() != 1.0f)
+                    && !(state.getBlock() instanceof TVBlock || state.getBlock() instanceof BigTVBlock)) {
                 return createDynamicOutlineShape(state, displayEntity);
             }
         }
@@ -141,36 +142,57 @@ public class DisplayBlock extends BlockWithEntity {
         Direction facing = state.get(PROP_FACING);
 
         double minX, maxX, minY, maxY, minZ, maxZ;
-        minY = 0.5 - halfH + offsetY;
-        maxY = 0.5 + halfH + offsetY;
-
         if (attachment == Direction.UP || attachment == Direction.DOWN) {
             // Keep TV as vertical surface even when attached to floor/ceiling.
-            // Use wall-like shape centered in block for interaction consistency.
+            // Floor/ceiling attachments are rendered outside the anchor block, so depth uses 1.5/-0.5 base coordinates.
+            double verticalOffset = (attachment == Direction.UP ? offsetY : -offsetY);
+            minY = 0.5 - halfH + verticalOffset;
+            maxY = 0.5 + halfH + verticalOffset;
+
             switch (facing) {
                 case NORTH -> {
                     minX = 0.5 - halfW + offsetX;
                     maxX = 0.5 + halfW + offsetX;
-                    minZ = -offsetZ;
-                    maxZ = thickness - offsetZ;
+                    if (attachment == Direction.UP) {
+                        minZ = 1.5 - offsetZ - thickness / 2.0;
+                        maxZ = 1.5 - offsetZ + thickness / 2.0;
+                    } else {
+                        minZ = 1.5 + offsetZ - thickness / 2.0;
+                        maxZ = 1.5 + offsetZ + thickness / 2.0;
+                    }
                 }
                 case SOUTH -> {
                     minX = 0.5 - halfW - offsetX;
                     maxX = 0.5 + halfW - offsetX;
-                    minZ = 1 - thickness + offsetZ;
-                    maxZ = 1 + offsetZ;
+                    if (attachment == Direction.UP) {
+                        minZ = -0.5 + offsetZ - thickness / 2.0;
+                        maxZ = -0.5 + offsetZ + thickness / 2.0;
+                    } else {
+                        minZ = -0.5 - offsetZ - thickness / 2.0;
+                        maxZ = -0.5 - offsetZ + thickness / 2.0;
+                    }
                 }
                 case EAST -> {
-                    minX = 1 - thickness + offsetZ;
-                    maxX = 1 + offsetZ;
                     minZ = 0.5 - halfW + offsetX;
                     maxZ = 0.5 + halfW + offsetX;
+                    if (attachment == Direction.UP) {
+                        minX = -0.5 + offsetZ - thickness / 2.0;
+                        maxX = -0.5 + offsetZ + thickness / 2.0;
+                    } else {
+                        minX = -0.5 - offsetZ - thickness / 2.0;
+                        maxX = -0.5 - offsetZ + thickness / 2.0;
+                    }
                 }
                 case WEST -> {
-                    minX = -offsetZ;
-                    maxX = thickness - offsetZ;
                     minZ = 0.5 - halfW - offsetX;
                     maxZ = 0.5 + halfW - offsetX;
+                    if (attachment == Direction.UP) {
+                        minX = 1.5 - offsetZ - thickness / 2.0;
+                        maxX = 1.5 - offsetZ + thickness / 2.0;
+                    } else {
+                        minX = 1.5 + offsetZ - thickness / 2.0;
+                        maxX = 1.5 + offsetZ + thickness / 2.0;
+                    }
                 }
                 default -> {
                     minX = 0.5 - halfW;
@@ -181,28 +203,30 @@ public class DisplayBlock extends BlockWithEntity {
             }
         } else {
             // Wall-mounted shape
+            minY = 0.5 - halfH + offsetY;
+            maxY = 0.5 + halfH + offsetY;
             switch (facing) {
                 case NORTH -> {
                     minX = 0.5 - halfW + offsetX;
                     maxX = 0.5 + halfW + offsetX;
-                    minZ = -offsetZ;
-                    maxZ = thickness - offsetZ;
+                    minZ = 1.5 - offsetZ - thickness / 2.0;
+                    maxZ = 1.5 - offsetZ + thickness / 2.0;
                 }
                 case SOUTH -> {
                     minX = 0.5 - halfW - offsetX;
                     maxX = 0.5 + halfW - offsetX;
-                    minZ = 1 - thickness + offsetZ;
-                    maxZ = 1 + offsetZ;
+                    minZ = -0.5 + offsetZ - thickness / 2.0;
+                    maxZ = -0.5 + offsetZ + thickness / 2.0;
                 }
                 case EAST -> {
-                    minX = 1 - thickness + offsetZ;
-                    maxX = 1 + offsetZ;
+                    minX = -0.5 + offsetZ - thickness / 2.0;
+                    maxX = -0.5 + offsetZ + thickness / 2.0;
                     minZ = 0.5 - halfW + offsetX;
                     maxZ = 0.5 + halfW + offsetX;
                 }
                 case WEST -> {
-                    minX = -offsetZ;
-                    maxX = thickness - offsetZ;
+                    minX = 1.5 - offsetZ - thickness / 2.0;
+                    maxX = 1.5 - offsetZ + thickness / 2.0;
                     minZ = 0.5 - halfW - offsetX;
                     maxZ = 0.5 + halfW - offsetX;
                 }

@@ -70,11 +70,13 @@ public class DisplayBlockScreen extends Screen {
 
     /** The block entity this screen is opened on. The following fields are temporaries to save later. */
     private final DisplayBlockEntity display;
+    private final boolean fixedScaleOffset;
 
     private TextFieldWidget widthField, heightField, offsetXField, offsetYField, offsetZField;
     private AudioDistanceSliderWidget audioDistanceSlider;
     private AudioVolumeSliderWidget audioVolumeSlider;
-    private CyclingButtonWidget<SourceType> sourceTypeButton;
+    private ButtonWidget sourceTypeButton;
+    private SourceType sourceType;
     private TextWidget errorText;
 
     private TextFieldWidget rawUriField;
@@ -94,13 +96,10 @@ public class DisplayBlockScreen extends Screen {
     private boolean dirty;
     private ButtonWidget doneButton;
 
-    private boolean isTVDisplay() {
-        return this.display instanceof TVBlockEntity || this.display instanceof BigTVBlockEntity;
-    }
-
     public DisplayBlockScreen(DisplayBlockEntity display) {
         super(ScreenTexts.EMPTY);
         this.display = display;
+        this.fixedScaleOffset = display instanceof TVBlockEntity || display instanceof BigTVBlockEntity;
     }
 
     @Override
@@ -139,19 +138,16 @@ public class DisplayBlockScreen extends Screen {
         String widthVal = widthField == null ? Float.toString(this.display.getWidth()) : widthField.getText();
         widthField = new TextFieldWidget(this.textRenderer, xHalf - 154, yTop + 11, 50, 18, Text.empty());
         widthField.setText(widthVal);
+        widthField.setEditable(!this.fixedScaleOffset);
         widthField.setChangedListener(val -> this.dirty = true);
         this.addDrawableChild(widthField);
 
         String heightVal = heightField == null ? Float.toString(this.display.getHeight()) : heightField.getText();
         heightField = new TextFieldWidget(this.textRenderer, xHalf - 96, yTop + 11, 50, 18, Text.empty());
         heightField.setText(heightVal);
+        heightField.setEditable(!this.fixedScaleOffset);
         heightField.setChangedListener(val -> this.dirty = true);
         this.addDrawableChild(heightField);
-
-        if (isTVDisplay()) {
-            widthField.setEditable(false);
-            heightField.setEditable(false);
-        }
 
         // Offset section
         TextWidget offsetXText = new TextWidget(OFFSET_X_TEXT, this.textRenderer);
@@ -175,46 +171,42 @@ public class DisplayBlockScreen extends Screen {
         String offsetXVal = offsetXField == null ? Double.toString(this.display.getOffsetX()) : offsetXField.getText();
         offsetXField = new TextFieldWidget(this.textRenderer, xHalf - 38, yTop + 11, 50, 18, Text.empty());
         offsetXField.setText(offsetXVal);
+        offsetXField.setEditable(!this.fixedScaleOffset);
         offsetXField.setChangedListener(val -> this.dirty = true);
         this.addDrawableChild(offsetXField);
 
         String offsetYVal = offsetYField == null ? Double.toString(this.display.getOffsetY()) : offsetYField.getText();
         offsetYField = new TextFieldWidget(this.textRenderer, xHalf + 20, yTop + 11, 50, 18, Text.empty());
         offsetYField.setText(offsetYVal);
+        offsetYField.setEditable(!this.fixedScaleOffset);
         offsetYField.setChangedListener(val -> this.dirty = true);
         this.addDrawableChild(offsetYField);
 
         String offsetZVal = offsetZField == null ? Double.toString(this.display.getOffsetZ()) : offsetZField.getText();
         offsetZField = new TextFieldWidget(this.textRenderer, xHalf + 78, yTop + 11, 50, 18, Text.empty());
         offsetZField.setText(offsetZVal);
+        offsetZField.setEditable(!this.fixedScaleOffset);
         offsetZField.setChangedListener(val -> this.dirty = true);
         this.addDrawableChild(offsetZField);
 
-        if (isTVDisplay()) {
-            offsetXField.setEditable(false);
-            offsetYField.setEditable(false);
-            offsetZField.setEditable(false);
-        }
-
         DisplaySource source = this.display.getSource();
-        SourceType sourceType = SourceType.RAW;
-        if (sourceTypeButton != null) {
-            sourceType = sourceTypeButton.getValue();
-        } else if (source instanceof TwitchDisplaySource) {
-            sourceType = SourceType.TWITCH;
-        } else if (source instanceof YoutubeDisplaySource) {
-            sourceType = SourceType.YOUTUBE;
+        if (this.sourceType == null) {
+            this.sourceType = SourceType.RAW;
+            if (source instanceof TwitchDisplaySource) {
+                this.sourceType = SourceType.TWITCH;
+            } else if (source instanceof YoutubeDisplaySource) {
+                this.sourceType = SourceType.YOUTUBE;
+            }
         }
 
-        sourceTypeButton = CyclingButtonWidget.builder(SourceType::getText)
-                .values(SourceType.values())
-                .build(xHalf + 136, yTop + 10, 76, 20, Text.empty(), (widget, val) -> {
-                    // When cycling, we reset the UI to adapt for the new source type.
-                    if (this.client != null) {
-                        this.init(this.client, this.width, this.height);
-                    }
-                });
-        sourceTypeButton.setValue(sourceType);
+        sourceTypeButton = ButtonWidget.builder(this.sourceType.getText(), button -> {
+            SourceType[] values = SourceType.values();
+            this.sourceType = values[(this.sourceType.ordinal() + 1) % values.length];
+            button.setMessage(this.sourceType.getText());
+            if (this.client != null) {
+                this.init(this.client, this.width, this.height);
+            }
+        }).dimensions(xHalf + 136, yTop + 10, 76, 20).build();
         this.addDrawableChild(sourceTypeButton);
 
         float audioDistanceVal = audioDistanceSlider == null ? this.display.getAudioDistance() : audioDistanceSlider.getDistance();
@@ -396,8 +388,7 @@ public class DisplayBlockScreen extends Screen {
         float width, height;
         double offsetX, offsetY, offsetZ;
 
-        if (isTVDisplay()) {
-            // Immutable TV dimensions and offsets (locked to model geometry)
+        if (this.fixedScaleOffset) {
             width = this.display.getWidth();
             height = this.display.getHeight();
             offsetX = this.display.getOffsetX();
@@ -428,7 +419,7 @@ public class DisplayBlockScreen extends Screen {
         String youtubeVideoId = null;
         String youtubeQuality = null;
 
-        SourceType sourceType = this.sourceTypeButton.getValue();
+        SourceType sourceType = this.sourceType;
 
         if (sourceType == SourceType.RAW) {
 
@@ -506,7 +497,7 @@ public class DisplayBlockScreen extends Screen {
 
         if (commit) {
 
-            if (!isTVDisplay()) {
+            if (!this.fixedScaleOffset) {
                 this.display.setSize(width, height);
                 this.display.setOffset(offsetX, offsetY, offsetZ);
             }
@@ -558,7 +549,7 @@ public class DisplayBlockScreen extends Screen {
 
         super.tick();
 
-        SourceType sourceType = this.sourceTypeButton.getValue();
+        SourceType sourceType = this.sourceType;
 
         if (sourceType == SourceType.TWITCH) {
             this.asyncPlaylist.fetch(this.executor, pl -> {

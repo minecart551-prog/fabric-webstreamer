@@ -122,9 +122,14 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
         matrices.push();
 
         // Apply block position offset first
-        switch (attachment) {
-            case NORTH, SOUTH, EAST, WEST -> matrices.translate(0.5f - facing.getOffsetX(), 0.5f, 0.5f - facing.getOffsetZ());
-            case UP, DOWN -> matrices.translate(0.5f, 0.5f, 0.5f);
+        if (attachment == Direction.UP || attachment == Direction.DOWN) {
+            if (isTV) {
+                matrices.translate(0.5f - facing.getOffsetX(), 0.5f, 0.5f - facing.getOffsetZ());
+            } else {
+                matrices.translate(0.5f, 0.5f, 0.5f);
+            }
+        } else {
+            matrices.translate(0.5f - facing.getOffsetX(), 0.5f, 0.5f - facing.getOffsetZ());
         }
 
         // Apply user-defined offset based on attachment orientation
@@ -143,21 +148,21 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
                 }
             }
             case UP -> {
-                // For floor-mounted displays, X offset is horizontal, Y offset is in facing direction, Z is vertical
+                // For floor-mounted displays, X offset is horizontal, Y offset is vertical, Z is depth.
                 switch (facing) {
-                    case NORTH -> matrices.translate(offsetX, offsetZ, -offsetY);
-                    case SOUTH -> matrices.translate(-offsetX, offsetZ, offsetY);
-                    case EAST -> matrices.translate(offsetY, offsetZ, offsetX);
-                    case WEST -> matrices.translate(-offsetY, offsetZ, -offsetX);
+                    case NORTH -> matrices.translate(offsetX, offsetY, -offsetZ);
+                    case SOUTH -> matrices.translate(-offsetX, offsetY, offsetZ);
+                    case EAST -> matrices.translate(offsetZ, offsetY, offsetX);
+                    case WEST -> matrices.translate(-offsetZ, offsetY, -offsetX);
                 }
             }
             case DOWN -> {
-                // For ceiling-mounted displays, X offset is horizontal, Y offset is in facing direction, Z is vertical
+                // For ceiling-mounted displays, X offset is horizontal, Y offset is vertical downward, Z is depth.
                 switch (facing) {
-                    case NORTH -> matrices.translate(offsetX, -offsetZ, offsetY);
-                    case SOUTH -> matrices.translate(-offsetX, -offsetZ, -offsetY);
-                    case EAST -> matrices.translate(-offsetY, -offsetZ, offsetX);
-                    case WEST -> matrices.translate(offsetY, -offsetZ, -offsetX);
+                    case NORTH -> matrices.translate(offsetX, -offsetY, offsetZ);
+                    case SOUTH -> matrices.translate(-offsetX, -offsetY, -offsetZ);
+                    case EAST -> matrices.translate(-offsetZ, -offsetY, offsetX);
+                    case WEST -> matrices.translate(offsetZ, -offsetY, -offsetX);
                 }
             }
         }

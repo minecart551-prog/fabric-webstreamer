@@ -51,6 +51,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     private boolean grabberPending = false;
     private boolean grabberReady   = false;
     private boolean grabberFailed  = false;
+    private boolean grabberFailureLogged = false;
     private int failedGrabs = 0;
     private long refTimestamp = -1;  // First image frame timestamp from FFmpeg
     private Frame lastFrame = null;   // Buffered frame for later playback
@@ -286,8 +287,11 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         this.lastUse = System.nanoTime();
 
         if (this.grabberFailed) {
-            // Layer is permanently failed, stop audio
-            WebStreamerMod.LOGGER.info(makeLog("Grabber failed, stopping audio."));
+            // Layer is permanently failed, stop audio and log the failure only once.
+            if (!this.grabberFailureLogged) {
+                WebStreamerMod.LOGGER.info(makeLog("Grabber failed, stopping audio."));
+                this.grabberFailureLogged = true;
+            }
             this.audioSource.stop();
             return;
         }
