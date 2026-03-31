@@ -106,14 +106,8 @@ public class DisplayBlock extends BlockWithEntity {
 
     @Override
     public VoxelShape getOutlineShape(BlockState state, BlockView world, BlockPos pos, ShapeContext context) {
-        if (world.getBlockEntity(pos) instanceof DisplayBlockEntity displayEntity) {
-            // Customized display blocks have dynamic width/height and offset. TV blocks use fixed model hitboxes.
-            if ((displayEntity.getWidth() != 1.0f || displayEntity.getHeight() != 1.0f)
-                    && !(state.getBlock() instanceof TVBlock || state.getBlock() instanceof BigTVBlock)) {
-                return createDynamicOutlineShape(state, displayEntity);
-            }
-        }
-
+        // Web display hitbox stays fixed in position and size regardless of GUI offsets/scale.
+        // TV and BigTV blocks still use their own dynamic outline logic in their subclasses.
         return switch (state.get(PROP_ATTACHMENT)) {
             case NORTH, SOUTH, EAST, WEST -> switch (state.get(PROP_FACING)) {
                 case NORTH -> SHAPE_NORTH;
@@ -122,8 +116,8 @@ public class DisplayBlock extends BlockWithEntity {
                 case WEST -> SHAPE_WEST;
                 default -> VoxelShapes.fullCube();
             };
-            case DOWN -> SHAPE_FLOOR;
-            case UP -> SHAPE_CEILING;
+            case UP -> SHAPE_FLOOR;
+            case DOWN -> SHAPE_CEILING;
         };
     }
 

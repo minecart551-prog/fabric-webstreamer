@@ -125,8 +125,10 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
         if (attachment == Direction.UP || attachment == Direction.DOWN) {
             if (isTV) {
                 matrices.translate(0.5f - facing.getOffsetX(), 0.5f, 0.5f - facing.getOffsetZ());
+            } else if (attachment == Direction.UP) {
+                matrices.translate(0.5f, -0.5f, 0.5f);
             } else {
-                matrices.translate(0.5f, 0.5f, 0.5f);
+                matrices.translate(0.5f, 1.5f, 0.5f);
             }
         } else {
             matrices.translate(0.5f - facing.getOffsetX(), 0.5f, 0.5f - facing.getOffsetZ());
