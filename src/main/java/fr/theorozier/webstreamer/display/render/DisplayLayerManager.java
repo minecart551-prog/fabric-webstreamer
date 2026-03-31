@@ -59,6 +59,8 @@ public class DisplayLayerManager extends DisplayLayerMap<DisplayLayerNode.Key> {
     @NotNull
     protected DisplayLayerNode getNewLayer(Key key) throws OutOfLayerException, UnknownFormatException {
 
+        this.cleanupLayersIf(existingKey -> existingKey.display() == key.display() && !existingKey.uri().equals(key.uri()), 0);
+
         if (this.cost() >= MAX_LAYERS_COST) {
             throw new OutOfLayerException();
         }

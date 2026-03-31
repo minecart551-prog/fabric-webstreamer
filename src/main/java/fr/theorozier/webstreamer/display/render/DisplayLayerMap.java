@@ -50,6 +50,10 @@ public abstract class DisplayLayerMap<K> implements DisplayLayerNode {
         return false;
     }
 
+    protected void cleanupLayersIf(java.util.function.Predicate<K> predicate, long now) {
+        this.layers.entrySet().removeIf(entry -> predicate.test(entry.getKey()) && entry.getValue().cleanup(now));
+    }
+
     @Override
     public int cost() {
         return this.layers.values().stream().mapToInt(DisplayLayerNode::cost).sum();
