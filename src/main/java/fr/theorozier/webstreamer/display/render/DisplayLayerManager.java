@@ -82,7 +82,7 @@ public class DisplayLayerManager extends DisplayLayerMap<DisplayLayerNode.Key> {
         // DisplayLayerVideo which feeds the URL straight into FrameGrabber.
         String scheme = key.uri().getScheme();
         if ("http".equals(scheme) || "https".equals(scheme)) {
-            return new DisplayLayerVideo(key.uri(), this.res);
+            return new DisplayLayerVideo(key, this.res);
         }
 
         throw new UnknownFormatException();

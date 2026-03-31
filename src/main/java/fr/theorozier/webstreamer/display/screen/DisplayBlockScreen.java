@@ -47,7 +47,7 @@ public class DisplayBlockScreen extends Screen {
     private static final Text SOURCE_TYPE_YOUTUBE_TEXT = Text.translatable("gui.webstreamer.display.sourceType.youtube");
     private static final Text URL_TEXT = Text.translatable("gui.webstreamer.display.url");
     private static final Text CHANNEL_TEXT = Text.translatable("gui.webstreamer.display.channel");
-    private static final Text VIDEO_ID_TEXT = Text.translatable("gui.webstreamer.display.videoId");
+    private static final Text VIDEO_ID_TEXT = Text.literal("YouTube URL / Playlist URL");
     private static final Text NO_QUALITY_TEXT = Text.translatable("gui.webstreamer.display.noQuality");
     private static final Text QUALITY_TEXT = Text.translatable("gui.webstreamer.display.quality");
     private static final String AUDIO_DISTANCE_TEXT_KEY = "gui.webstreamer.display.audioDistance";
@@ -93,6 +93,9 @@ public class DisplayBlockScreen extends Screen {
     private TextWidget youtubeQualityText;
     private Playlist youtubePlaylist;
     private YoutubeClient.YoutubeException youtubePlaylistExc;
+    private ButtonWidget youtubePrevButton;
+    private ButtonWidget youtubeNextButton;
+    private TextWidget youtubePlaylistStatusText;
 
     private boolean dirty;
     private ButtonWidget doneButton;
@@ -298,19 +301,26 @@ public class DisplayBlockScreen extends Screen {
             if (youtubeVideoIdField != null) {
                 youtubeVideoIdVal = youtubeVideoIdField.getText();
             } else if (source instanceof YoutubeDisplaySource youtubeSource) {
-                youtubeVideoIdVal = youtubeSource.getVideoId();
-                this.asyncYoutubePlaylist.push(youtubeVideoIdVal);
+                if (youtubeSource.hasPlaylist()) {
+                    youtubeVideoIdVal = youtubeSource.getSourceText();
+                } else {
+                    youtubeVideoIdVal = youtubeSource.getVideoId();
+                }
+                List<String> ids = parseYoutubeVideoIds(youtubeVideoIdVal);
+                this.asyncYoutubePlaylist.push(ids.isEmpty() ? "" : ids.get(0));
             } else {
                 this.asyncYoutubePlaylist.push("");
             }
 
             youtubeVideoIdField = new TextFieldWidget(this.textRenderer, xHalf - 154, ySourceTop + 10, 308, 20, Text.empty());
-            youtubeVideoIdField.setMaxLength(256);
+            youtubeVideoIdField.setMaxLength(1024);
             youtubeVideoIdField.setText(youtubeVideoIdVal);
             youtubeVideoIdField.setChangedListener(val -> {
-                this.asyncYoutubePlaylist.push(val);
+                List<String> ids = parseYoutubeVideoIds(val);
+                this.asyncYoutubePlaylist.push(ids.isEmpty() ? "" : ids.get(0));
                 this.dirty = true;
             });
+
             this.addDrawableChild(this.youtubeVideoIdField);
 
             youtubeQualityText = new TextWidget(QUALITY_TEXT, this.textRenderer);
@@ -323,7 +333,24 @@ public class DisplayBlockScreen extends Screen {
             youtubeQualitySlider.setChangedListener(val -> this.dirty = true);
             this.addDrawableChild(youtubeQualitySlider);
 
-            ySourceBottom += 50 + 40;
+            youtubePlaylistStatusText = new TextWidget(this.width, 0, Text.empty(), this.textRenderer);
+            youtubePlaylistStatusText.setPosition(xHalf - 154, ySourceTop + 130);
+            youtubePlaylistStatusText.setTextColor(0xA0A0A0);
+            youtubePlaylistStatusText.alignLeft();
+            youtubePlaylistStatusText.visible = false;
+            this.addDrawableChild(youtubePlaylistStatusText);
+
+            youtubePrevButton = ButtonWidget.builder(Text.literal("Prev"), button -> this.onYoutubePlaylistPrevious())
+                    .dimensions(xHalf - 154, ySourceTop + 95, 75, 20)
+                    .build();
+            youtubeNextButton = ButtonWidget.builder(Text.literal("Next"), button -> this.onYoutubePlaylistNext())
+                    .dimensions(xHalf - 79, ySourceTop + 95, 75, 20)
+                    .build();
+            this.addDrawableChild(youtubePrevButton);
+            this.addDrawableChild(youtubeNextButton);
+
+            updateYoutubePlaylistControls(source instanceof YoutubeDisplaySource youtubeSource ? youtubeSource : null);
+            ySourceBottom += 95 + 40;
 
         }
 
@@ -377,6 +404,47 @@ public class DisplayBlockScreen extends Screen {
         this.doneButton.active = false;
         this.errorText.setMessage(message);
         this.errorText.visible = true;
+    }
+
+    private void updateYoutubePlaylistControls(YoutubeDisplaySource youtubeSource) {
+        boolean playlist = youtubeSource != null && youtubeSource.hasPlaylist();
+        if (this.youtubePlaylistStatusText != null) {
+            if (playlist) {
+                this.youtubePlaylistStatusText.setMessage(Text.literal(
+                        String.format("Playlist %d/%d", youtubeSource.getPlaylistIndex() + 1, youtubeSource.getPlaylistSize())));
+            } else {
+                this.youtubePlaylistStatusText.setMessage(Text.empty());
+            }
+            this.youtubePlaylistStatusText.visible = playlist;
+        }
+        if (this.youtubePrevButton != null) {
+            this.youtubePrevButton.visible = playlist;
+            this.youtubePrevButton.active = playlist;
+        }
+        if (this.youtubeNextButton != null) {
+            this.youtubeNextButton.visible = playlist;
+            this.youtubeNextButton.active = playlist;
+        }
+    }
+
+    private void onYoutubePlaylistPrevious() {
+        DisplaySource source = this.display.getSource();
+        if (source instanceof YoutubeDisplaySource youtubeSource && youtubeSource.previousVideo()) {
+            this.display.setSource(youtubeSource);
+            DisplayNetworking.sendDisplayUpdate(this.display);
+            updateYoutubePlaylistControls(youtubeSource);
+            this.dirty = true;
+        }
+    }
+
+    private void onYoutubePlaylistNext() {
+        DisplaySource source = this.display.getSource();
+        if (source instanceof YoutubeDisplaySource youtubeSource && youtubeSource.advanceVideo()) {
+            this.display.setSource(youtubeSource);
+            DisplayNetworking.sendDisplayUpdate(this.display);
+            updateYoutubePlaylistControls(youtubeSource);
+            this.dirty = true;
+        }
     }
 
     /**
@@ -489,8 +557,8 @@ public class DisplayBlockScreen extends Screen {
                 throw new IllegalStateException("youtube quality should be present if playlist is present");
             }
 
-            youtubeVideoId = this.youtubePlaylist.getChannel(); // getChannel() returns the video ID for YouTube
             youtubeQuality = youtubeQualityRaw.name();
+            youtubeVideoId = this.youtubeVideoIdField != null ? this.youtubeVideoIdField.getText() : this.youtubePlaylist.getChannel();
 
         }
 
@@ -519,7 +587,30 @@ public class DisplayBlockScreen extends Screen {
             } else if (sourceType == SourceType.TWITCH) {
                 this.display.setSource(new TwitchDisplaySource(twitchChannel, twitchQuality));
             } else if (sourceType == SourceType.YOUTUBE) {
-                this.display.setSource(new YoutubeDisplaySource(youtubeVideoId, youtubeQuality));
+                String youtubeInput = youtubeVideoId == null ? "" : youtubeVideoId;
+                List<String> youtubeIds = parseYoutubeVideoIds(youtubeInput);
+                if (YoutubeClient.extractPlaylistId(youtubeInput) != null) {
+                    try {
+                        List<String> playlistIds = WebStreamerClientMod.YOUTUBE_CLIENT.requestPlaylistVideos(youtubeInput);
+                        if (!playlistIds.isEmpty()) {
+                            youtubeIds = playlistIds;
+                        }
+                    } catch (YoutubeClient.YoutubeException e) {
+                        this.showError(switch (e.getExceptionType()) {
+                            case FETCH_FAILED, PARSE_FAILED -> ERR_YOUTUBE;
+                            case INVALID_VIDEO_ID, VIDEO_NOT_FOUND -> ERR_YOUTUBE_NOT_FOUND_TEXT;
+                            case VIDEO_UNAVAILABLE -> ERR_YOUTUBE_UNAVAILABLE_TEXT;
+                            case NO_STREAMS -> ERR_YOUTUBE_NO_STREAMS_TEXT;
+                        });
+                        return false;
+                    }
+                }
+
+                if (youtubeIds.size() > 1) {
+                    this.display.setSource(new YoutubeDisplaySource(youtubeIds, youtubeQuality, youtubeInput));
+                } else {
+                    this.display.setSource(new YoutubeDisplaySource(youtubeVideoId.isBlank() ? null : youtubeVideoId, youtubeQuality));
+                }
             }
 
             DisplayNetworking.sendDisplayUpdate(this.display);
@@ -550,6 +641,30 @@ public class DisplayBlockScreen extends Screen {
      */
     private void cancelAndClose() {
         this.close();
+    }
+
+    private static List<String> parseYoutubeVideoIds(String input) {
+        if (input == null || input.isBlank()) {
+            return List.of();
+        }
+        String[] tokens = input.split("[,;\\s]+");
+        List<String> ids = new java.util.ArrayList<>();
+        for (String token : tokens) {
+            String trimmed = token.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            String playlistId = YoutubeClient.extractPlaylistId(trimmed);
+            if (playlistId != null) {
+                ids.add(trimmed);
+                continue;
+            }
+            String id = YoutubeClient.extractVideoId(trimmed);
+            if (id != null && !id.isBlank()) {
+                ids.add(id);
+            }
+        }
+        return ids;
     }
 
     @Override

@@ -21,7 +21,7 @@ import java.net.URI;
 public abstract class DisplayLayerSimple implements DisplayLayerNode, DisplayLayer {
 	
 	// Common //
-	protected final URI uri;
+	protected URI uri;
 	protected final DisplayLayerResources res;
 	protected final DisplayTexture tex;
 	private final DisplayRenderLayer renderLayer;

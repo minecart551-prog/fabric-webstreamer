@@ -1,8 +1,10 @@
 package fr.theorozier.webstreamer.display.render;
 
 import fr.theorozier.webstreamer.WebStreamerMod;
+import fr.theorozier.webstreamer.display.DisplayBlockEntity;
 import fr.theorozier.webstreamer.display.audio.AudioStreamingBuffer;
 import fr.theorozier.webstreamer.display.audio.AudioStreamingSource;
+import fr.theorozier.webstreamer.display.source.YoutubeDisplaySource;
 import fr.theorozier.webstreamer.WebStreamerClientMod;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
@@ -65,10 +67,22 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     private ShortBuffer tempAudioBuffer;
     private final AudioStreamingSource audioSource;
 
+    private final DisplayBlockEntity display;
+    private URI currentUri;
+
     private volatile boolean destroyed = false;
 
     public DisplayLayerVideo(URI uri, DisplayLayerResources res) {
         super(uri, res);
+        this.display = null;
+        this.currentUri = uri;
+        this.audioSource = new AudioStreamingSource(this.makeLog("audio"));
+    }
+
+    public DisplayLayerVideo(DisplayLayerNode.Key key, DisplayLayerResources res) {
+        super(key.uri(), res);
+        this.display = key.display();
+        this.currentUri = key.uri();
         this.audioSource = new AudioStreamingSource(this.makeLog("audio"));
     }
 
@@ -176,7 +190,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             // 1. Download to a temp file using Java's HttpClient.
             tmp = Files.createTempFile("webstreamer_yt_", ".mp4");
 
-            HttpRequest req = HttpRequest.newBuilder(this.uri)
+            HttpRequest req = HttpRequest.newBuilder(this.currentUri)
                     .GET()
                     .header("User-Agent", USER_AGENT)
                     .header("Referer", "https://www.youtube.com/")
@@ -254,6 +268,32 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         this.tempFile       = null;
         this.grabberReady   = false;
         this.grabberPending = false;
+    }
+
+    private boolean tryRestartNextVideo() {
+        if (!(this.display != null && this.display.getSource() instanceof YoutubeDisplaySource youtubeSource)) {
+            return false;
+        }
+        if (!youtubeSource.advanceVideo()) {
+            return false;
+        }
+        URI nextUri = youtubeSource.getUri();
+        if (nextUri == null) {
+            return false;
+        }
+        WebStreamerMod.LOGGER.info(makeLog("Restarting YouTube playlist with next video {}"), youtubeSource.getCurrentVideoId());
+        this.currentUri = nextUri;
+        this.failedGrabs = 0;
+        this.refTimestamp = -1;
+        this.pausedPlaybackMicros = 0;
+        this.playbackMicros = 0;
+        this.lastTickNanos = 0;
+        this.lastFrame = null;
+        this.audioSource.stop();
+        this.stopGrabber();
+        this.grabberFailed = false;
+        this.grabberPending = false;
+        return true;
     }
 
     private void deleteTempFile(Path path) {
@@ -408,6 +448,9 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             }
 
             if (frame == null) {
+                if (this.tryRestartNextVideo()) {
+                    return;
+                }
                 WebStreamerMod.LOGGER.warn(makeLog("Reached EOF, stopping grabber."));
                 this.stopGrabber();
                 this.grabberFailed = true;

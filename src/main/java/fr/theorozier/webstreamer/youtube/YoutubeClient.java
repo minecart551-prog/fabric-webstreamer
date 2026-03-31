@@ -26,6 +26,8 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * YouTube client using the internal Android player API.
@@ -62,6 +64,9 @@ public class YoutubeClient {
             "https://www.youtube.com/youtubei/v1/player?key=" + API_KEY +
                     "&prettyPrint=false";
 
+    private static final String WEB_USER_AGENT =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
     // Known progressive (video+audio combined) itags.
     private static final HashMap<Integer, String> KNOWN_ITAGS = new HashMap<>();
     static {
@@ -87,6 +92,12 @@ public class YoutubeClient {
     /** Cache: video ID → Playlist. Evicted manually via {@link #forgetPlaylist}. */
     private final HashMap<String, Playlist> cache = new HashMap<>();
 
+    /** Cache: playlist ID → video IDs for playlist entries. */
+    private final HashMap<String, List<String>> playlistCache = new HashMap<>();
+
+    private static final Pattern PLAYLIST_VIDEO_ID_PATTERN = Pattern.compile("\\\"playlistVideoRenderer\\\".*?\\\"videoId\\\"\\s*:\\s*\\\"([A-Za-z0-9_-]{11})\\\"", Pattern.DOTALL);
+    private static final Pattern FALLBACK_VIDEO_ID_PATTERN = Pattern.compile("\\\"videoId\\\"\\s*:\\s*\\\"([A-Za-z0-9_-]{11})\\\"");
+
     /**
      * Expose the shared HttpClient so DisplayLayerVideo can use the same
      * session for the video stream download.
@@ -109,6 +120,15 @@ public class YoutubeClient {
      * @throws YoutubeException If the video cannot be fetched or has no streams.
      */
     public Playlist requestPlaylist(String videoIdOrUrl) throws YoutubeException {
+        String playlistId = extractPlaylistId(videoIdOrUrl);
+        if (playlistId != null) {
+            List<String> ids = requestPlaylistVideos(playlistId);
+            if (ids.isEmpty()) {
+                throw new YoutubeException(YoutubeExceptionType.VIDEO_NOT_FOUND);
+            }
+            videoIdOrUrl = ids.get(0);
+        }
+
         // Extract video ID from URL if necessary
         String videoId = extractVideoId(videoIdOrUrl);
         
@@ -129,7 +149,6 @@ public class YoutubeClient {
         }
     }
 
-    /** Remove a cached playlist so it is re-fetched on the next call. */
     public void forgetPlaylist(String videoIdOrUrl) {
         String videoId = extractVideoId(videoIdOrUrl);
         synchronized (this.cache) {
@@ -137,14 +156,121 @@ public class YoutubeClient {
         }
     }
 
+    public List<String> requestPlaylistVideos(String playlistIdOrUrl) throws YoutubeException {
+        String playlistId = extractPlaylistId(playlistIdOrUrl);
+        if (playlistId == null) {
+            throw new YoutubeException(YoutubeExceptionType.INVALID_VIDEO_ID);
+        }
+
+        synchronized (this.playlistCache) {
+            List<String> cached = this.playlistCache.get(playlistId);
+            if (cached != null) {
+                return cached;
+            }
+        }
+
+        try {
+            URI playlistUri = new URI("https://www.youtube.com/playlist?list=" + playlistId);
+            HttpRequest request = HttpRequest.newBuilder(playlistUri)
+                    .GET()
+                    .header("User-Agent", WEB_USER_AGENT)
+                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                    .header("Accept-Language", "en-US,en;q=0.9")
+                    .timeout(Duration.ofSeconds(15))
+                    .build();
+
+            HttpResponse<String> response = this.httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                throw new YoutubeException(YoutubeExceptionType.FETCH_FAILED);
+            }
+
+            String body = response.body();
+            int startIndex = body.indexOf("\"playlistVideoRenderer\"");
+            String snippet = startIndex >= 0 ? body.substring(startIndex) : body;
+
+            Matcher matcher = PLAYLIST_VIDEO_ID_PATTERN.matcher(snippet);
+            List<String> ids = new ArrayList<>();
+            Set<String> seen = new LinkedHashSet<>();
+            while (matcher.find()) {
+                String id = matcher.group(1);
+                if (seen.add(id)) {
+                    ids.add(id);
+                }
+            }
+
+            if (ids.isEmpty()) {
+                matcher = FALLBACK_VIDEO_ID_PATTERN.matcher(body);
+                while (matcher.find()) {
+                    String id = matcher.group(1);
+                    if (seen.add(id)) {
+                        ids.add(id);
+                    }
+                }
+            }
+
+            if (ids.isEmpty()) {
+                throw new YoutubeException(YoutubeExceptionType.PARSE_FAILED);
+            }
+
+            synchronized (this.playlistCache) {
+                this.playlistCache.put(playlistId, ids);
+            }
+            return ids;
+        } catch (YoutubeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new YoutubeException(YoutubeExceptionType.FETCH_FAILED, e);
+        }
+    }
+
+    public void forgetPlaylistVideos(String playlistIdOrUrl) {
+        String playlistId = extractPlaylistId(playlistIdOrUrl);
+        if (playlistId == null) {
+            return;
+        }
+        synchronized (this.playlistCache) {
+            this.playlistCache.remove(playlistId);
+        }
+    }
+
+    public static String extractPlaylistId(String playlistIdOrUrl) {
+        if (playlistIdOrUrl == null || playlistIdOrUrl.isBlank()) {
+            return null;
+        }
+
+        if (playlistIdOrUrl.contains("youtube.com") || playlistIdOrUrl.contains("youtu.be")) {
+            try {
+                java.net.URL url = new java.net.URL(playlistIdOrUrl);
+                String query = url.getQuery();
+
+                if (query != null && query.contains("list=")) {
+                    String[] parts = query.split("&");
+                    for (String part : parts) {
+                        if (part.startsWith("list=")) {
+                            return part.substring(5);
+                        }
+                    }
+                }
+            } catch (java.net.MalformedURLException e) {
+                // fall through
+            }
+        }
+
+        if (playlistIdOrUrl.matches("^(PL|LL|UU|WL|RD|OL|FL)[A-Za-z0-9_-]+$")) {
+            return playlistIdOrUrl;
+        }
+
+        return null;
+    }
+
     /**
-     * Extract video ID from a YouTube URL or return the input if it's already a video ID.
+     * Return the playlist of stream qualities for a given video ID or YouTube URL.
      * Supports formats:
      * - https://www.youtube.com/watch?v=VIDEO_ID
      * - https://youtu.be/VIDEO_ID
      * - or just VIDEO_ID directly
      */
-    private static String extractVideoId(String videoIdOrUrl) {
+    public static String extractVideoId(String videoIdOrUrl) {
         if (videoIdOrUrl == null || videoIdOrUrl.isBlank()) {
             return videoIdOrUrl;
         }
@@ -155,7 +281,7 @@ public class YoutubeClient {
                 java.net.URL url = new java.net.URL(videoIdOrUrl);
                 String host = url.getHost();
                 String query = url.getQuery();
-                
+
                 if (host.contains("youtube.com")) {
                     // Format: https://www.youtube.com/watch?v=VIDEO_ID
                     if (query != null && query.contains("v=")) {
