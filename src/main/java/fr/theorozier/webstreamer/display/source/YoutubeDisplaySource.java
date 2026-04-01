@@ -56,7 +56,7 @@ public class YoutubeDisplaySource extends DisplaySource {
         this.videoIds = new ArrayList<>(videoIds);
         this.quality = quality;
         this.currentVideoIndex = 0;
-        this.sourceText = sourceText != null ? sourceText : String.join(", ", videoIds);
+        this.sourceText = sourceText;
     }
 
     public void setVideoIdQuality(String videoId, String quality) {
@@ -71,8 +71,7 @@ public class YoutubeDisplaySource extends DisplaySource {
         this.videoIds = new ArrayList<>(videoIds);
         this.videoId = null;
         this.currentVideoIndex = 0;
-        this.currentVideoIndex = 0;
-        this.sourceText = String.join(", ", videoIds);
+        this.sourceText = null;
         this.quality = quality;
     }
 
@@ -80,6 +79,7 @@ public class YoutubeDisplaySource extends DisplaySource {
         this.videoId = null;
         this.videoIds = null;
         this.currentVideoIndex = 0;
+        this.sourceText = null;
         this.quality = null;
     }
 
@@ -99,7 +99,13 @@ public class YoutubeDisplaySource extends DisplaySource {
     }
 
     public String getSourceText() {
-        return this.sourceText;
+        if (this.sourceText != null) {
+            return this.sourceText;
+        }
+        if (this.videoIds != null && !this.videoIds.isEmpty()) {
+            return String.join(", ", this.videoIds);
+        }
+        return this.videoId;
     }
 
     public String getQuality() {
@@ -213,6 +219,12 @@ public class YoutubeDisplaySource extends DisplaySource {
 
     @Override
     public void readNbt(NbtCompound nbt) {
+        this.videoId = null;
+        this.videoIds = null;
+        this.currentVideoIndex = 0;
+        this.sourceText = null;
+        this.quality = null;
+
         if (nbt.get("videoIds") instanceof NbtString videoIdsString) {
             String raw = videoIdsString.asString();
             String[] ids = raw.split(",");

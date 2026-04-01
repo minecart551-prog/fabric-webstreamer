@@ -41,7 +41,6 @@ public class DisplayBlockEntity extends BlockEntity {
         }
 
         DisplaySource currentSource = this.source;
-        this.source = null;
 
         // Only clean up the layer for this block, not all layers
         if (net.fabricmc.api.EnvType.CLIENT == net.fabricmc.loader.api.FabricLoader.getInstance().getEnvironmentType()) {

@@ -98,6 +98,7 @@ public class DisplayBlockScreen extends Screen {
     private TextWidget youtubePlaylistStatusText;
 
     private boolean dirty;
+    private boolean commitOnClose = true;
     private ButtonWidget doneButton;
 
     public DisplayBlockScreen(DisplayBlockEntity display) {
@@ -333,21 +334,21 @@ public class DisplayBlockScreen extends Screen {
             youtubeQualitySlider.setChangedListener(val -> this.dirty = true);
             this.addDrawableChild(youtubeQualitySlider);
 
+            youtubePrevButton = ButtonWidget.builder(Text.literal("Prev"), button -> this.onYoutubePlaylistPrevious())
+                    .dimensions(xHalf + 4, ySourceTop + 95, 75, 20)
+                    .build();
+            youtubeNextButton = ButtonWidget.builder(Text.literal("Next"), button -> this.onYoutubePlaylistNext())
+                    .dimensions(xHalf + 83, ySourceTop + 95, 75, 20)
+                    .build();
+            this.addDrawableChild(youtubePrevButton);
+            this.addDrawableChild(youtubeNextButton);
+
             youtubePlaylistStatusText = new TextWidget(this.width, 0, Text.empty(), this.textRenderer);
-            youtubePlaylistStatusText.setPosition(xHalf - 154, ySourceTop + 130);
+            youtubePlaylistStatusText.setPosition(xHalf + 4, ySourceTop + 120);
             youtubePlaylistStatusText.setTextColor(0xA0A0A0);
             youtubePlaylistStatusText.alignLeft();
             youtubePlaylistStatusText.visible = false;
             this.addDrawableChild(youtubePlaylistStatusText);
-
-            youtubePrevButton = ButtonWidget.builder(Text.literal("Prev"), button -> this.onYoutubePlaylistPrevious())
-                    .dimensions(xHalf - 154, ySourceTop + 95, 75, 20)
-                    .build();
-            youtubeNextButton = ButtonWidget.builder(Text.literal("Next"), button -> this.onYoutubePlaylistNext())
-                    .dimensions(xHalf - 79, ySourceTop + 95, 75, 20)
-                    .build();
-            this.addDrawableChild(youtubePrevButton);
-            this.addDrawableChild(youtubeNextButton);
 
             updateYoutubePlaylistControls(source instanceof YoutubeDisplaySource youtubeSource ? youtubeSource : null);
             ySourceBottom += 95 + 40;
@@ -589,6 +590,11 @@ public class DisplayBlockScreen extends Screen {
             } else if (sourceType == SourceType.YOUTUBE) {
                 String youtubeInput = youtubeVideoId == null ? "" : youtubeVideoId;
                 List<String> youtubeIds = parseYoutubeVideoIds(youtubeInput);
+                if (youtubeInput.isBlank()) {
+                    this.showError(ERR_YOUTUBE);
+                    return false;
+                }
+
                 if (YoutubeClient.extractPlaylistId(youtubeInput) != null) {
                     try {
                         List<String> playlistIds = WebStreamerClientMod.YOUTUBE_CLIENT.requestPlaylistVideos(youtubeInput);
@@ -604,6 +610,11 @@ public class DisplayBlockScreen extends Screen {
                         });
                         return false;
                     }
+                }
+
+                if (youtubeIds.isEmpty()) {
+                    this.showError(ERR_YOUTUBE);
+                    return false;
                 }
 
                 if (youtubeIds.size() > 1) {
@@ -625,13 +636,23 @@ public class DisplayBlockScreen extends Screen {
      * Internal function to commit the current values to the display block and then close the window. Nothing is
      * committed if any value is invalid.
      */
+    @Override
+    public void removed() {
+        if (this.commitOnClose) {
+            this.refresh(true);
+        }
+        super.removed();
+    }
+
     private void commitAndClose() {
         // Verify player is in creative mode before committing changes if locked
         if (this.display.requiresOp() && (this.client == null || this.client.player == null || !this.client.player.isCreative())) {
+            this.commitOnClose = false;
             this.close();
             return;
         }
         if (this.refresh(true)) {
+            this.commitOnClose = false;
             this.close();
         }
     }
@@ -640,6 +661,7 @@ public class DisplayBlockScreen extends Screen {
      * Internal function to cancel configuration and close the screen.
      */
     private void cancelAndClose() {
+        this.commitOnClose = false;
         this.close();
     }
 

@@ -85,18 +85,20 @@ public class DisplayNetworking {
 
         @Override
         public void receive(MinecraftServer server, ServerPlayerEntity player, ServerPlayNetworkHandler handler, PacketByteBuf buf, PacketSender responseSender) {
-            if (DisplayBlock.canUse(player)) {
-                decodeDisplayUpdatePacket(buf, (pos, nbt) -> {
-                    ServerWorld world = player.getServerWorld();
-                    world.getServer().executeSync(() -> {
-                        if (world.getBlockEntity(pos) instanceof DisplayBlockEntity blockEntity) {
-                            blockEntity.readNbt(nbt);
-                            blockEntity.markDirty();
-                            world.updateListeners(pos, blockEntity.getCachedState(), blockEntity.getCachedState(), Block.NOTIFY_ALL);
+            decodeDisplayUpdatePacket(buf, (pos, nbt) -> {
+                ServerWorld world = player.getServerWorld();
+                world.getServer().executeSync(() -> {
+                    if (world.getBlockEntity(pos) instanceof DisplayBlockEntity blockEntity) {
+                        if (blockEntity.requiresOp() && !player.isCreative()) {
+                            return;
                         }
-                    });
+                        blockEntity.readNbt(nbt);
+                        blockEntity.markDirty();
+                        world.markDirty(pos);
+                        world.updateListeners(pos, blockEntity.getCachedState(), blockEntity.getCachedState(), Block.NOTIFY_ALL);
+                    }
                 });
-            }
+            });
         }
 
     }
