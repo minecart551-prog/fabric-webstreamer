@@ -124,6 +124,13 @@ public class YoutubeDisplaySource extends DisplaySource {
         return this.currentVideoIndex;
     }
 
+    public void setPlaylistIndex(int currentVideoIndex) {
+        if (this.videoIds == null || this.videoIds.isEmpty()) {
+            return;
+        }
+        this.currentVideoIndex = Math.floorMod(currentVideoIndex, this.videoIds.size());
+    }
+
     public boolean advanceVideo() {
         if (!hasPlaylist()) {
             return false;

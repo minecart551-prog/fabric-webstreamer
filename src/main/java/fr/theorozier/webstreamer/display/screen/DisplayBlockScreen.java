@@ -618,7 +618,17 @@ public class DisplayBlockScreen extends Screen {
                 }
 
                 if (youtubeIds.size() > 1) {
-                    this.display.setSource(new YoutubeDisplaySource(youtubeIds, youtubeQuality, youtubeInput));
+                    YoutubeDisplaySource newSource = new YoutubeDisplaySource(youtubeIds, youtubeQuality, youtubeInput);
+                    if (this.display.getSource() instanceof YoutubeDisplaySource existingYoutubeSource && existingYoutubeSource.hasPlaylist()) {
+                        List<String> existingIds = existingYoutubeSource.getVideoIds();
+                        if (existingIds.equals(youtubeIds) || youtubeInput.equals(existingYoutubeSource.getSourceText())) {
+                            int currentIndex = existingIds.indexOf(existingYoutubeSource.getCurrentVideoId());
+                            if (currentIndex >= 0) {
+                                newSource.setPlaylistIndex(currentIndex);
+                            }
+                        }
+                    }
+                    this.display.setSource(newSource);
                 } else {
                     this.display.setSource(new YoutubeDisplaySource(youtubeVideoId.isBlank() ? null : youtubeVideoId, youtubeQuality));
                 }

@@ -41,6 +41,8 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 	private static final long INITIAL_PLAYLIST_REQUEST_INTERVAL = 500000000L; // 0.5 seconds
 	/** Interval of playlist requests when a past request has failed, to avoid spamming. */
 	private static final long FAILING_PLAYLIST_REQUEST_INTERVAL = 5L * 1000000000L;
+	/** Audio resync threshold in microseconds. */
+	private static final long AUDIO_SYNC_THRESHOLD = 50000L;
 
     private final MediaPlaylistParser hlsParser;
 	private final ReadableProfiler profiler;
@@ -458,7 +460,14 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 			this.tex.upload(frame);
 			this.profiler.swap("play_audio");
 			if (this.audioInRange) {
-				this.audioSource.playFrom(frame.timestamp);
+				if (!this.audioSource.isPlaying()) {
+					this.audioSource.playFrom(frame.timestamp);
+				} else {
+					long audioTs = this.audioSource.getEstimatedPlaybackTimestamp();
+					if (audioTs > 0 && Math.abs(frame.timestamp - audioTs) > AUDIO_SYNC_THRESHOLD) {
+						this.audioSource.playFrom(frame.timestamp);
+					}
+				}
 			}
 			this.profiler.pop();
 		}

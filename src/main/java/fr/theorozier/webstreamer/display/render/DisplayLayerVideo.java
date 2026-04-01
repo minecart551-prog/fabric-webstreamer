@@ -292,7 +292,9 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         this.audioSource.stop();
         this.stopGrabber();
         this.grabberFailed = false;
-        this.grabberPending = false;
+        this.grabberFailureLogged = false;
+        this.grabberPending = true;
+        this.res.getExecutor().submit(this::startGrabberAsync);
         return true;
     }
 
