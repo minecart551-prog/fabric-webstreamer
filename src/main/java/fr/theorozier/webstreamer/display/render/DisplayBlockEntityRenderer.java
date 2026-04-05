@@ -2,6 +2,7 @@ package fr.theorozier.webstreamer.display.render;
 
 import fr.theorozier.webstreamer.WebStreamerClientMod;
 import fr.theorozier.webstreamer.WebStreamerMod;
+import fr.theorozier.webstreamer.config.WebStreamerClientConfig;
 import fr.theorozier.webstreamer.display.BigTVBlock;
 import fr.theorozier.webstreamer.display.DisplayBlock;
 import fr.theorozier.webstreamer.display.DisplayBlockEntity;
@@ -25,6 +26,7 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
+import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.shape.VoxelShape;
 import net.minecraft.world.World;
 
@@ -57,13 +59,23 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
         this.textRenderer = ctx.getTextRenderer();
     }
 
+    @Override
+    public int getRenderDistance() {
+        return WebStreamerClientConfig.getDisplayBlockRenderDistance();
+    }
+
+    @Override
+    public boolean isInRenderDistance(DisplayBlockEntity blockEntity, Vec3d cameraPos) {
+        int dist = WebStreamerClientConfig.getDisplayBlockRenderDistance();
+        return blockEntity.getPos().getSquaredDistance(cameraPos) < (double) (dist * dist);
+    }
+
     private static boolean isTVBlock(net.minecraft.block.Block block) {
         return block instanceof TVBlock || block instanceof BigTVBlock;
     }
 
     @Override
     public void render(DisplayBlockEntity entity, float tickDelta, MatrixStack matrices, VertexConsumerProvider vertexConsumers, int light, int overlay) {
-
 
         // If the block entity is removed, world is null, or the block is no longer a DisplayBlock, skip rendering and layer logic
         if (entity.getWorld() == null || entity.isRemoved() || !(entity.getWorld().getBlockState(entity.getPos()).getBlock() instanceof DisplayBlock)) {
@@ -141,7 +153,6 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
 
         switch (attachment) {
             case NORTH, SOUTH, EAST, WEST -> {
-                // For wall-mounted displays, apply offset in world coordinates
                 switch (facing) {
                     case NORTH -> matrices.translate(offsetX, offsetY, -offsetZ);
                     case SOUTH -> matrices.translate(-offsetX, offsetY, offsetZ);
@@ -150,7 +161,6 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
                 }
             }
             case UP -> {
-                // For floor-mounted displays, X offset is horizontal, Y offset is vertical, Z is depth.
                 switch (facing) {
                     case NORTH -> matrices.translate(offsetX, offsetY, -offsetZ);
                     case SOUTH -> matrices.translate(-offsetX, offsetY, offsetZ);
@@ -159,7 +169,6 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
                 }
             }
             case DOWN -> {
-                // For ceiling-mounted displays, X offset is horizontal, Y offset is vertical downward, Z is depth.
                 switch (facing) {
                     case NORTH -> matrices.translate(offsetX, -offsetY, offsetZ);
                     case SOUTH -> matrices.translate(-offsetX, -offsetY, -offsetZ);
@@ -175,14 +184,6 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
             case EAST -> matrices.multiply(ROTATE_270);
             case WEST -> matrices.multiply(ROTATE_90);
             default -> throw new IllegalArgumentException();
-        }
-
-        switch (attachment) {
-            case NORTH, SOUTH, EAST, WEST -> {}
-            case UP, DOWN -> {
-                // For TV and BigTV blocks, floor/ceiling states should still render vertically.
-                // Keep same face orientation as normal wall placements and avoid horizontal quad.
-            }
         }
 
         // Apply conditional rotation for floor/ceiling placement
@@ -201,6 +202,7 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
                 BlockPos pos = entity.getPos();
                 float audioDistance = entity.getAudioDistance();
                 int playerDist = pos.getManhattanDistance(this.gameRenderer.getCamera().getBlockPos());
+
                 boolean inRange = !(audioDistance > 0f && playerDist > audioDistance);
 
                 if (entity.getWorld() != null && DisplayNetworking.shouldSendPlaybackRangeUpdate(entity.getWorld().getRegistryKey(), pos, inRange)) {
@@ -241,12 +243,6 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
                 // Width/Height end coords
                 float w = entity.getWidth();
                 float h = entity.getHeight();
-
-                // For TV and BigTV, force fixed panel geometry and quad depth
-                if (isTV) {
-                    w = entity.getWidth();
-                    h = entity.getHeight();
-                }
 
                 // Width/Height start coords
                 float hw = w / 2f;

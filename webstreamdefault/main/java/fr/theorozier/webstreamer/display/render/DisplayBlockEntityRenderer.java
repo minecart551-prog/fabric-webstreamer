@@ -2,6 +2,7 @@ package fr.theorozier.webstreamer.display.render;
 
 import fr.theorozier.webstreamer.WebStreamerClientMod;
 import fr.theorozier.webstreamer.WebStreamerMod;
+import fr.theorozier.webstreamer.config.WebStreamerClientConfig;
 import fr.theorozier.webstreamer.display.DisplayBlock;
 import fr.theorozier.webstreamer.display.DisplayBlockEntity;
 import fr.theorozier.webstreamer.mixin.WorldRendererInvoker;
@@ -23,6 +24,7 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
+import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.shape.VoxelShape;
 
 import org.joml.AxisAngle4d;
@@ -52,6 +54,17 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
     @SuppressWarnings("unused")
     public DisplayBlockEntityRenderer(BlockEntityRendererFactory.Context ctx) {
         this.textRenderer = ctx.getTextRenderer();
+    }
+
+    @Override
+    public int getRenderDistance() {
+        return WebStreamerClientConfig.getDisplayBlockRenderDistance();
+    }
+
+    @Override
+    public boolean isInRenderDistance(DisplayBlockEntity blockEntity, Vec3d cameraPos) {
+        int dist = WebStreamerClientConfig.getDisplayBlockRenderDistance();
+        return blockEntity.getPos().getSquaredDistance(cameraPos) < (double) (dist * dist);
     }
 
     @Override
