@@ -1,10 +1,12 @@
 package fr.theorozier.webstreamer.display.screen;
 
 import fr.theorozier.webstreamer.WebStreamerClientMod;
+import fr.theorozier.webstreamer.display.BigTVBlock;
 import fr.theorozier.webstreamer.display.BigTVBlockEntity;
 import fr.theorozier.webstreamer.display.DisplayBlock;
 import fr.theorozier.webstreamer.display.DisplayBlockEntity;
 import fr.theorozier.webstreamer.display.DisplayNetworking;
+import fr.theorozier.webstreamer.display.TVBlock;
 import fr.theorozier.webstreamer.display.TVBlockEntity;
 import fr.theorozier.webstreamer.display.WebDisplayPBlock;
 import fr.theorozier.webstreamer.display.source.DisplaySource;
@@ -216,7 +218,7 @@ public class DisplayBlockScreen extends Screen {
         this.addDrawableChild(sourceTypeButton);
 
         float audioDistanceVal = audioDistanceSlider == null ? this.display.getAudioDistance() : audioDistanceSlider.getDistance();
-        boolean isBaseDisplay = this.display.getCachedState().getBlock() instanceof DisplayBlock && !(this.display.getCachedState().getBlock() instanceof WebDisplayPBlock);
+        boolean isBaseDisplay = this.display.getCachedState().getBlock() instanceof DisplayBlock && !(this.display.getCachedState().getBlock() instanceof WebDisplayPBlock)&& !(this.display.getCachedState().getBlock() instanceof TVBlock)&& !(this.display.getCachedState().getBlock() instanceof BigTVBlock);
         float maxAudioDistance = isBaseDisplay ? 512f : 64f;
         audioDistanceSlider = new AudioDistanceSliderWidget(xHalf - 154, yTop + 36, 150, 20, audioDistanceVal, maxAudioDistance);
         audioDistanceSlider.setChangedListener(val -> this.dirty = true);

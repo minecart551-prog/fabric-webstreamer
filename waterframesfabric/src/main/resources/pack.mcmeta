@@ -1,6 +1,0 @@
-{
-    "pack": {
-        "description": "Resources of ${modname}. Models by FabiAcr and J-RAP, Aquatic Design by Kotyarendj",
-        "pack_format": ${respack_version}
-    }
-}
