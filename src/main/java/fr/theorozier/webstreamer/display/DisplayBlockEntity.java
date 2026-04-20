@@ -1,5 +1,4 @@
 
-
 package fr.theorozier.webstreamer.display;
 
 import fr.theorozier.webstreamer.WebStreamerMod;
@@ -278,6 +277,17 @@ public class DisplayBlockEntity extends BlockEntity {
 
             this.markRenderDataSourceDirty();
 
+        }
+
+        // Validate audio distance based on block type to prevent loading invalid values from old NBT data
+        if (this.getCachedState().getBlock() instanceof WebDisplayPBlock || 
+            this.getCachedState().getBlock() instanceof TVBlock || 
+            this.getCachedState().getBlock() instanceof BigTVBlock) {
+            // TV blocks have a maximum audio distance of 64 blocks
+            this.audioDistance = Math.min(this.audioDistance, 64f);
+        } else if (this.getCachedState().getBlock() instanceof DisplayBlock) {
+            // Base display blocks have a maximum audio distance of 512 blocks
+            this.audioDistance = Math.min(this.audioDistance, 512f);
         }
 
     }

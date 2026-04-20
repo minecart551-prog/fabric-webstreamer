@@ -49,9 +49,8 @@ public class DisplayBlock extends BlockWithEntity {
     public DisplayBlock() {
         this(Settings.create()
                 .sounds(BlockSoundGroup.GLASS)
-                .strength(-1.0f, 3600000.0f)
+                .strength(0.5f, 2.0f)
                 .requiresTool()
-                .dropsNothing()
                 .nonOpaque());
     }
 
@@ -261,7 +260,7 @@ public class DisplayBlock extends BlockWithEntity {
     }
 
     public static boolean canPlace(@NotNull PlayerEntity player) {
-        return player.hasPermissionLevel(2);
+        return true;
     }
 
     public static boolean canUse(@NotNull PlayerEntity player) {
