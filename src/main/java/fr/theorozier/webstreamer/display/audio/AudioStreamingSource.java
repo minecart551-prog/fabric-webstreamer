@@ -13,19 +13,16 @@ import static org.lwjgl.openal.AL11.*;
 @Environment(EnvType.CLIENT)
 public class AudioStreamingSource {
 
-	/** Pause the audio source. */
-	public void pause() {
-		this.checkValid();
-		alSourcePause(this.sourceId);
-	}
-
-	/** Resume the audio source from a specific timestamp. */
-	public void playFromTimestamp(long timestamp) {
-		this.playFrom(timestamp);
-	}
-
 	private final String name;
-	private int sourceId;
+	
+	/**
+	 * OpenAL source ID. 0 means not yet initialized or OpenAL unavailable.
+	 * Lazily initialized on first audio operation that actually needs it.
+	 */
+	private int sourceId = 0;
+	
+	/** True if we've already tried and failed to create the OpenAL source (to avoid spamming logs). */
+	private boolean initFailed = false;
 	
 	/** Real system nano timestamp when play started. */
 	private long playTimestamp;
@@ -45,11 +42,42 @@ public class AudioStreamingSource {
 
 	public AudioStreamingSource(String name) {
 		this.name = name;
-		this.sourceId = alGenSources();
-		alSourcei(this.sourceId, AL_LOOPING, AL_FALSE);
-		alSourcei(this.sourceId, AL_SOURCE_RELATIVE, AL_FALSE);
-		this.setVolume(1f);
-		this.setAttenuation(50f);
+		// NOTE: OpenAL source initialization is now lazy — alGenSources() is NOT called here.
+		// This avoids crashes when layers are created during rendering before the OpenAL
+		// context is fully initialized (e.g. early world load, sound disabled, etc.).
+		// The source will be created on first actual audio operation (playFrom, queueBuffer, etc.).
+	}
+	
+	/**
+	 * Lazily initialize the OpenAL source, if not already done and if OpenAL is available.
+	 * @return true if the source is ready for use, false if OpenAL is unavailable.
+	 */
+	private boolean ensureInitialized() {
+		if (this.sourceId != 0) {
+			return true;
+		}
+		if (this.initFailed) {
+			return false;
+		}
+		try {
+			int id = alGenSources();
+			if (id != 0) {
+				this.sourceId = id;
+				alSourcei(this.sourceId, AL_LOOPING, AL_FALSE);
+				alSourcei(this.sourceId, AL_SOURCE_RELATIVE, AL_FALSE);
+				this.setVolume(1f);
+				this.setAttenuation(50f);
+				return true;
+			}
+		} catch (ExceptionInInitializerError | IllegalStateException e) {
+			// OpenAL not available — probably the sound system hasn't initialized yet.
+			WebStreamerMod.LOGGER.warn("[{}] OpenAL not available, audio will be disabled: {}", this.name, e.getMessage());
+		} catch (UnsatisfiedLinkError e) {
+			// OpenAL native library not loadable
+			WebStreamerMod.LOGGER.warn("[{}] OpenAL library not available: {}", this.name, e.getMessage());
+		}
+		this.initFailed = true;
+		return false;
 	}
 	
 	public int getSourceId() {
@@ -67,6 +95,9 @@ public class AudioStreamingSource {
 	}
 	
 	public void free() {
+		if (this.sourceId == 0) {
+			return; // Never initialized, nothing to free
+		}
 		this.checkValid();
 		this.queue.forEach(AudioStreamingBuffer::free);
 		this.queue.clear();
@@ -80,10 +111,14 @@ public class AudioStreamingSource {
 		alSourceStop(this.sourceId);
 		alDeleteSources(this.sourceId);
 		this.sourceId = 0;
+		this.initFailed = false; // Reset so it can be re-created later
 	}
 
 	/** Manually stop the source, when doing that all queued buffers are freed and cleared. */
 	public void stop() {
+		if (this.sourceId == 0) {
+			return; // Never initialized, nothing to stop
+		}
 		this.checkValid();
 		alSourceStop(this.sourceId);
 		this.queue.forEach(AudioStreamingBuffer::free);
@@ -96,18 +131,38 @@ public class AudioStreamingSource {
 		this.playBufferTimestamp = 0;
 	}
 	
-	public void setPosition(Vec3i pos) {
+	/** Pause the audio source. */
+	public void pause() {
+		if (this.sourceId == 0) {
+			return; // Not initialized, nothing to pause
+		}
 		this.checkValid();
+		alSourcePause(this.sourceId);
+	}
+
+	/** Resume the audio source from a specific timestamp. */
+	public void playFromTimestamp(long timestamp) {
+		this.playFrom(timestamp);
+	}
+	
+	public void setPosition(Vec3i pos) {
+		if (!this.ensureInitialized()) {
+			return;
+		}
 		alSourcefv(this.sourceId, AL_POSITION, new float[] {(float) pos.getX() + 0.5f, (float) pos.getY() + 0.5f, (float) pos.getZ() + 0.5f});
 	}
 	
 	public void setVolume(float volume) {
-		this.checkValid();
+		if (!this.ensureInitialized()) {
+			return;
+		}
 		alSourcef(this.sourceId, AL_GAIN, volume);
 	}
 	
 	public void setAttenuation(float attenuation) {
-		this.checkValid();
+		if (!this.ensureInitialized()) {
+			return;
+		}
 		alSourcei(this.sourceId, AL_DISTANCE_MODEL, AL_LINEAR_DISTANCE);
 		alSourcef(this.sourceId, AL_MAX_DISTANCE, attenuation);
 		alSourcef(this.sourceId, AL_ROLLOFF_FACTOR, 1.0F);
@@ -115,11 +170,18 @@ public class AudioStreamingSource {
 	}
 	
 	public boolean isPlaying() {
+		if (this.sourceId == 0) {
+			return false;
+		}
 		this.checkValid();
 		return alGetSourcei(this.sourceId, AL_SOURCE_STATE) == AL_PLAYING;
 	}
 	
 	public void playFrom(long timestamp) {
+
+		if (!this.ensureInitialized()) {
+			return;
+		}
 		
 		this.checkValid();
 		this.lastRequestedTimestamp = timestamp;
@@ -202,6 +264,10 @@ public class AudioStreamingSource {
 	 * @param buffer A non-null streaming buffer.
 	 */
 	public void queueBuffer(AudioStreamingBuffer buffer) {
+
+		if (!this.ensureInitialized()) {
+			return;
+		}
 		
 		Objects.requireNonNull(buffer, "given buffer should not be null");
 		
@@ -247,6 +313,9 @@ public class AudioStreamingSource {
 	 * Unqueue processed buffers and free them.
 	 */
 	public void unqueueAndFree() {
+		if (this.sourceId == 0) {
+			return;
+		}
 		int numProcessed = alGetSourcei(this.sourceId, AL_BUFFERS_PROCESSED);
 		if (numProcessed > 0) {
 			WebStreamerMod.LOGGER.debug("Unqueuing {} processed buffers", numProcessed);
