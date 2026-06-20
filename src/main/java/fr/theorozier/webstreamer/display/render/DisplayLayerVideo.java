@@ -2,6 +2,7 @@ package fr.theorozier.webstreamer.display.render;
 
 import fr.theorozier.webstreamer.WebStreamerMod;
 import fr.theorozier.webstreamer.display.DisplayBlockEntity;
+import fr.theorozier.webstreamer.util.FFmpegLibrary;
 import fr.theorozier.webstreamer.display.audio.AudioStreamingBuffer;
 import fr.theorozier.webstreamer.display.audio.AudioStreamingSource;
 import fr.theorozier.webstreamer.display.source.YoutubeDisplaySource;
@@ -176,6 +177,13 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         if (this.destroyed) {
             return;
         }
+
+        // Lazily load FFmpeg native libraries on first actual use.
+        // This must happen AFTER the GLFW window is created to avoid
+        // interfering with GLX/GLXFBConfig initialization on some
+        // GPU/driver combinations (e.g. AMD Radeon RX 7900 XTX / radeonsi).
+        FFmpegLibrary.ensureInitialized();
+
         Path tmp = null;
         ShortBuffer audioBuf = this.res.allocAudioBuffer();
         if (this.destroyed) {

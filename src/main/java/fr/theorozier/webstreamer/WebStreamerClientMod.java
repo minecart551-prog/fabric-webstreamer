@@ -10,8 +10,6 @@ import net.fabricmc.fabric.api.blockrenderlayer.v1.BlockRenderLayerMap;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.minecraft.client.render.block.entity.BlockEntityRendererFactories;
 import net.minecraft.client.render.RenderLayer;
-import org.bytedeco.ffmpeg.global.avutil;
-import org.bytedeco.javacv.FFmpegLogCallback;
 import fr.theorozier.webstreamer.youtube.YoutubeClient;
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
@@ -94,7 +92,6 @@ public class WebStreamerClientMod implements ClientModInitializer {
         DISPLAY_LAYERS = new DisplayLayerManager();
         TWITCH_CLIENT = new TwitchClient();
         YOUTUBE_CLIENT = new YoutubeClient();
-        FFmpegLogCallback.setLevel(avutil.AV_LOG_QUIET);
     
     }
 

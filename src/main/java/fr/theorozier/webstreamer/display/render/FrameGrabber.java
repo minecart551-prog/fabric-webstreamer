@@ -2,6 +2,7 @@ package fr.theorozier.webstreamer.display.render;
 
 import fr.theorozier.webstreamer.WebStreamerMod;
 import fr.theorozier.webstreamer.display.audio.AudioStreamingBuffer;
+import fr.theorozier.webstreamer.util.FFmpegLibrary;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
@@ -55,6 +56,12 @@ public class FrameGrabber {
 		if (this.grabber != null || this.buffer != null) {
 			throw new IllegalStateException("already started");
 		}
+
+		// Lazily load FFmpeg native libraries on first actual use.
+		// This must happen AFTER the GLFW window is created to avoid
+		// interfering with GLX/GLXFBConfig initialization on some
+		// GPU/driver combinations (e.g. AMD Radeon RX 7900 XTX / radeonsi).
+		FFmpegLibrary.ensureInitialized();
 		
 		try {
 
