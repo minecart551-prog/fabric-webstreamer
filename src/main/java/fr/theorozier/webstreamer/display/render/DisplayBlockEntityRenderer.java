@@ -225,6 +225,10 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
                 }
 
                 if (layer.isLost()) {
+                    // Reset the URI to re-fetch on next render cycle.
+                    // The YoutubeClient.failedVideoIds cache ensures that permanently
+                    // unavailable videos (VIDEO_UNAVAILABLE, NOT_FOUND) are rejected
+                    // immediately with no HTTP request, so this is safe to call every frame.
                     entity.resetSourceUri();
                     matrices.pop();
                     return;

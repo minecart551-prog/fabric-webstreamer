@@ -92,6 +92,13 @@ public class YoutubeClient {
     /** Cache: video ID → Playlist. Evicted manually via {@link #forgetPlaylist}. */
     private final HashMap<String, Playlist> cache = new HashMap<>();
 
+    /**
+     * Set of video IDs that are permanently unavailable (VIDEO_UNAVAILABLE, NOT_FOUND, etc.).
+     * Prevents repeated failed HTTP requests every render frame when a video is blocked or removed.
+     * Evicted manually via {@link #forgetPlaylist}.
+     */
+    private final java.util.HashSet<String> failedVideoIds = new java.util.HashSet<>();
+
     /** Cache: playlist ID → video IDs for playlist entries. */
     private final HashMap<String, List<String>> playlistCache = new HashMap<>();
 
@@ -133,15 +140,28 @@ public class YoutubeClient {
         String videoId = extractVideoId(videoIdOrUrl);
         
         synchronized (this.cache) {
+            // Check success cache first
             Playlist cached = this.cache.get(videoId);
             if (cached != null) {
                 return cached;
+            }
+            // Check failed cache — prevents per-frame HTTP requests for permanently unavailable videos
+            if (this.failedVideoIds.contains(videoId)) {
+                WebStreamerMod.LOGGER.debug("Video {} is cached as failed, skipping re-fetch", videoId);
+                throw new YoutubeException(YoutubeExceptionType.VIDEO_UNAVAILABLE);
             }
             try {
                 Playlist playlist = this.fetchPlaylist(videoId);
                 this.cache.put(videoId, playlist);
                 return playlist;
             } catch (YoutubeException e) {
+                // Cache permanent failures (VIDEO_UNAVAILABLE, VIDEO_NOT_FOUND, INVALID_VIDEO_ID)
+                // so we don't hammer YouTube on every render frame.
+                if (e.getExceptionType() == YoutubeExceptionType.VIDEO_UNAVAILABLE ||
+                    e.getExceptionType() == YoutubeExceptionType.VIDEO_NOT_FOUND ||
+                    e.getExceptionType() == YoutubeExceptionType.INVALID_VIDEO_ID) {
+                    this.failedVideoIds.add(videoId);
+                }
                 throw e;
             } catch (Exception e) {
                 throw new YoutubeException(YoutubeExceptionType.FETCH_FAILED, e);
@@ -153,6 +173,7 @@ public class YoutubeClient {
         String videoId = extractVideoId(videoIdOrUrl);
         synchronized (this.cache) {
             this.cache.remove(videoId);
+            this.failedVideoIds.remove(videoId);
         }
     }
 
