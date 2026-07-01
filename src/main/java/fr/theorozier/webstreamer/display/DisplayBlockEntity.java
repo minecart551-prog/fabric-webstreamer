@@ -39,23 +39,21 @@ public class DisplayBlockEntity extends BlockEntity {
             this.cachedRenderData = null;
         }
 
-        DisplaySource currentSource = this.source;
-
-        // Only clean up the layer for this block, not all layers
+        // Only clean up the layer for this block, not all layers.
+        // IMPORTANT: Never call DisplaySource.getUri() from here — it may make
+        // blocking HTTP calls (e.g. Twitch) that would freeze the render thread.
+        // Only use the already-cached URI from DisplayRenderData, which is
+        // populated asynchronously and is guaranteed to be non-blocking.
         if (net.fabricmc.api.EnvType.CLIENT == net.fabricmc.loader.api.FabricLoader.getInstance().getEnvironmentType()) {
-            java.net.URI uri = null;
             if (renderDataObj instanceof fr.theorozier.webstreamer.display.render.DisplayRenderData renderData) {
-                uri = renderData.getUri(fr.theorozier.webstreamer.WebStreamerClientMod.DISPLAY_LAYERS.getResources().getExecutor());
-            }
-            if (uri == null && currentSource != null) {
-                uri = currentSource.getUri();
-            }
-            if (uri != null) {
-                try {
-                    fr.theorozier.webstreamer.display.render.DisplayLayerNode.Key key = new fr.theorozier.webstreamer.display.render.DisplayLayerNode.Key(uri, this);
-                    fr.theorozier.webstreamer.WebStreamerClientMod.DISPLAY_LAYERS.cleanupKey(key, 0L);
-                } catch (Exception e) {
-                    // Ignore errors (e.g., OutOfLayerException, UnknownFormatException)
+                java.net.URI uri = renderData.getUri(fr.theorozier.webstreamer.WebStreamerClientMod.DISPLAY_LAYERS.getResources().getExecutor());
+                if (uri != null) {
+                    try {
+                        fr.theorozier.webstreamer.display.render.DisplayLayerNode.Key key = new fr.theorozier.webstreamer.display.render.DisplayLayerNode.Key(uri, this);
+                        fr.theorozier.webstreamer.WebStreamerClientMod.DISPLAY_LAYERS.cleanupKey(key, 0L);
+                    } catch (Exception e) {
+                        // Ignore errors (e.g., OutOfLayerException, UnknownFormatException)
+                    }
                 }
             }
         }

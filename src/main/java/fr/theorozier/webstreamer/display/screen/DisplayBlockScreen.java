@@ -69,8 +69,16 @@ public class DisplayBlockScreen extends Screen {
     private static final Text ERR_YOUTUBE_NO_STREAMS_TEXT = Text.translatable("gui.webstreamer.display.error.youtubeNoStreams");
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
-    private final AsyncProcessor<String, Playlist, TwitchClient.PlaylistException> asyncPlaylist = new AsyncProcessor<>(WebStreamerClientMod.TWITCH_CLIENT::requestPlaylist, false);
     private final AsyncProcessor<String, Playlist, YoutubeClient.YoutubeException> asyncYoutubePlaylist = new AsyncProcessor<>(WebStreamerClientMod.YOUTUBE_CLIENT::requestPlaylist, false);
+
+    /**
+     * Managed directly instead of via AsyncProcessor because
+     * {@link TwitchClient#requestPlaylist(String)} now returns a
+     * {@link CompletableFuture}. We pull the result in {@link #tick()}
+     * without blocking the GUI thread.
+     */
+    private String pendingTwitchChannel;
+    private CompletableFuture<Playlist> twitchFuture;
 
     /** The block entity this screen is opened on. The following fields are temporaries to save later. */
     private final DisplayBlockEntity display;
@@ -269,16 +277,16 @@ public class DisplayBlockScreen extends Screen {
                 twitchChannelVal = twitchChannelField.getText();
             } else if (source instanceof TwitchDisplaySource twitchSource) {
                 twitchChannelVal = twitchSource.getChannel();
-                this.asyncPlaylist.push(twitchChannelVal);
+                this.requestTwitchPlaylist(twitchChannelVal);
             } else {
-                this.asyncPlaylist.push("");
+                this.requestTwitchPlaylist("");
             }
 
             twitchChannelField = new TextFieldWidget(this.textRenderer, xHalf - 154, ySourceTop + 10, 308, 20, Text.empty());
             twitchChannelField.setMaxLength(64);
             twitchChannelField.setText(twitchChannelVal);
             twitchChannelField.setChangedListener(val -> {
-                this.asyncPlaylist.push(val);
+                this.requestTwitchPlaylist(val);
                 this.dirty = true;
             });
             this.addDrawableChild(this.twitchChannelField);
@@ -392,6 +400,20 @@ public class DisplayBlockScreen extends Screen {
 
         this.dirty = true;
 
+    }
+
+    /**
+     * Initiate a Twitch playlist fetch (async). The result is polled in {@link #tick()}.
+     */
+    private void requestTwitchPlaylist(String channel) {
+        this.pendingTwitchChannel = channel;
+        this.twitchPlaylist = null;
+        this.twitchPlaylistExc = null;
+        if (channel != null && !channel.isEmpty()) {
+            this.twitchFuture = WebStreamerClientMod.TWITCH_CLIENT.requestPlaylist(channel);
+        } else {
+            this.twitchFuture = null;
+        }
     }
 
     /**
@@ -510,7 +532,8 @@ public class DisplayBlockScreen extends Screen {
 
         } else if (sourceType == SourceType.TWITCH) {
 
-            if (this.asyncPlaylist.requested() || !this.asyncPlaylist.idle()) {
+            // Check if a Twitch fetch is still pending
+            if (this.twitchFuture != null && !this.twitchFuture.isDone()) {
                 this.showError(ERR_PENDING);
                 return false;
             } else if (this.twitchPlaylistExc != null) {
@@ -714,22 +737,40 @@ public class DisplayBlockScreen extends Screen {
         SourceType sourceType = this.sourceType;
 
         if (sourceType == SourceType.TWITCH) {
-            this.asyncPlaylist.fetch(this.executor, pl -> {
-                boolean wasSet = this.twitchQualitySlider.getQuality() != null;
-                this.twitchPlaylist = pl;
-                this.twitchPlaylistExc = null;
-                this.twitchQualitySlider.setQualities(pl.getQualities());
-                // If the slider was new and the current source is a twitch one, set its quality.
-                if (!wasSet && this.display.getSource() instanceof TwitchDisplaySource twitchSource) {
-                    this.twitchQualitySlider.setQuality(twitchSource.getQuality());
+            // Poll the async Twitch future (non-blocking)
+            if (this.twitchFuture != null && this.twitchFuture.isDone()) {
+                try {
+                    Playlist pl = this.twitchFuture.get();
+                    boolean wasSet = this.twitchQualitySlider.getQuality() != null;
+                    this.twitchPlaylist = pl;
+                    this.twitchPlaylistExc = null;
+                    this.twitchQualitySlider.setQualities(pl.getQualities());
+                    // If the slider was new and the current source is a twitch one, set its quality.
+                    if (!wasSet && this.display.getSource() instanceof TwitchDisplaySource twitchSource) {
+                        this.twitchQualitySlider.setQuality(twitchSource.getQuality());
+                    }
+                    this.dirty = true;
+                } catch (ExecutionException e) {
+                    Throwable cause = e.getCause();
+                    if (cause instanceof TwitchClient.PlaylistException pe) {
+                        this.twitchPlaylist = null;
+                        this.twitchPlaylistExc = pe;
+                    } else {
+                        this.twitchPlaylist = null;
+                        this.twitchPlaylistExc = new TwitchClient.PlaylistException(TwitchClient.PlaylistExceptionType.UNKNOWN);
+                    }
+                    this.twitchQualitySlider.setQualities(null);
+                    this.dirty = true;
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    this.twitchPlaylist = null;
+                    this.twitchPlaylistExc = new TwitchClient.PlaylistException(TwitchClient.PlaylistExceptionType.UNKNOWN);
+                    this.twitchQualitySlider.setQualities(null);
+                    this.dirty = true;
+                } finally {
+                    this.twitchFuture = null;
                 }
-                this.dirty = true;
-            }, exc -> {
-                this.twitchPlaylist = null;
-                this.twitchPlaylistExc = exc;
-                this.twitchQualitySlider.setQualities(null);
-                this.dirty = true;
-            });
+            }
         } else if (sourceType == SourceType.YOUTUBE) {
             this.asyncYoutubePlaylist.fetch(this.executor, pl -> {
                 boolean wasSet = this.youtubeQualitySlider.getQuality() != null;
@@ -748,7 +789,17 @@ public class DisplayBlockScreen extends Screen {
                 this.dirty = true;
             });
         } else {
-            this.asyncPlaylist.fetch(this.executor, pl -> {}, exc -> {});
+            if (this.twitchFuture != null && this.twitchFuture.isDone()) {
+                // Consume the twitch future (discard result) to avoid stale references
+                try {
+                    this.twitchFuture.get();
+                } catch (Exception ignored) {
+                } finally {
+                    this.twitchFuture = null;
+                    this.twitchPlaylist = null;
+                    this.twitchPlaylistExc = null;
+                }
+            }
             this.asyncYoutubePlaylist.fetch(this.executor, pl -> {}, exc -> {});
         }
 
