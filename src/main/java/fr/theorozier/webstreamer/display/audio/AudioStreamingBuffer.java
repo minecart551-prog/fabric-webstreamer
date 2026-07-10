@@ -1,5 +1,6 @@
 package fr.theorozier.webstreamer.display.audio;
 
+import fr.theorozier.webstreamer.WebStreamerMod;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import org.bytedeco.javacv.Frame;
@@ -116,10 +117,19 @@ public class AudioStreamingBuffer {
 			throw new IllegalArgumentException("unsupported sample format");
 		}
 
-		int bufferId = alGenBuffers();
-		alBufferData(bufferId, AL_FORMAT_MONO16, tempBuffer, frequency);
-
-		AudioStreamingSource.checkErrors("audio buffer data");
+		int bufferId;
+		try {
+			bufferId = alGenBuffers();
+			alBufferData(bufferId, AL_FORMAT_MONO16, tempBuffer, frequency);
+			AudioStreamingSource.checkErrors("audio buffer data");
+		} catch (ExceptionInInitializerError | IllegalStateException | NoClassDefFoundError e) {
+			// OpenAL not available — return null so callers can skip audio.
+			WebStreamerMod.LOGGER.warn("OpenAL not available, skipping audio buffer: {}", e.getMessage());
+			return null;
+		} catch (UnsatisfiedLinkError e) {
+			WebStreamerMod.LOGGER.warn("OpenAL library not available, skipping audio buffer: {}", e.getMessage());
+			return null;
+		}
 
 		long duration = samples * 1000000L / frequency;
 

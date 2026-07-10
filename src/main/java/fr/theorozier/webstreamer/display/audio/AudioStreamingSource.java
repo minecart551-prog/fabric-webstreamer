@@ -1,3 +1,4 @@
+
 package fr.theorozier.webstreamer.display.audio;
 
 import fr.theorozier.webstreamer.WebStreamerMod;
@@ -69,8 +70,10 @@ public class AudioStreamingSource {
 				this.setAttenuation(50f);
 				return true;
 			}
-		} catch (ExceptionInInitializerError | IllegalStateException e) {
+		} catch (ExceptionInInitializerError | IllegalStateException | NoClassDefFoundError e) {
 			// OpenAL not available — probably the sound system hasn't initialized yet.
+			// NoClassDefFoundError occurs when the AL$ICDStatic$WriteOnce class failed
+			// to initialize on a previous attempt and is permanently broken.
 			WebStreamerMod.LOGGER.warn("[{}] OpenAL not available, audio will be disabled: {}", this.name, e.getMessage());
 		} catch (UnsatisfiedLinkError e) {
 			// OpenAL native library not loadable

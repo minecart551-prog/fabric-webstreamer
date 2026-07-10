@@ -438,8 +438,10 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                     // Queue audio frame
                     AudioStreamingBuffer audioBuf = AudioStreamingBuffer.fromFrame(
                             this.tempAudioBuffer, frame);
-                    this.audioSource.queueBuffer(audioBuf);
-                    audioBuffersQueued++;
+                    if (audioBuf != null) {
+                        this.audioSource.queueBuffer(audioBuf);
+                        audioBuffersQueued++;
+                    }
                 }
             }
 
