@@ -41,14 +41,29 @@ public final class FFmpegLibrary {
         }
 
         if (initialized.compareAndSet(false, true)) {
-            try {
-                // This triggers JavaCPP's Loader to extract and load the FFmpeg
-                // native libraries (libavformat, libavcodec, etc.) into the JVM.
-                FFmpegLogCallback.setLevel(avutil.AV_LOG_QUIET);
-                WebStreamerMod.LOGGER.info("[FFmpeg] Native libraries loaded successfully.");
-            } catch (Exception | UnsatisfiedLinkError e) {
-                WebStreamerMod.LOGGER.error("[FFmpeg] Failed to load native libraries.", e);
+
+            // 1. Find or download FFmpeg natives.
+            boolean nativesReady = WebStreamerNativesManager.setup();
+
+            if (nativesReady) {
+                // 2. Pre-load native DLLs via absolute paths so Java 9+ can find
+                //    them even if java.library.path is cached from JVM start.
+                WebStreamerNativesManager.preloadNativeLibraries();
+
+                try {
+                    // 3. Trigger JavaCPP's Loader; if our pre-load succeeded this
+                    //    should find libraries already registered.
+                    FFmpegLogCallback.setLevel(avutil.AV_LOG_QUIET);
+                    WebStreamerMod.LOGGER.info("[FFmpeg] Native libraries loaded successfully.");
+                    return;
+                } catch (Exception | UnsatisfiedLinkError e) {
+                    WebStreamerMod.LOGGER.error("[FFmpeg] Failed to load native libraries. " +
+                            "The files in <" + WebStreamerNativesManager.getNativesSubdir() +
+                            ">/ may be corrupt or mismatched.", e);
+                }
             }
+
+            initialized.set(false);
         }
     }
 
