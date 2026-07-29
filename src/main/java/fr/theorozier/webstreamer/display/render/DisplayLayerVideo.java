@@ -6,7 +6,6 @@ import fr.theorozier.webstreamer.util.FFmpegLibrary;
 import fr.theorozier.webstreamer.display.audio.AudioStreamingBuffer;
 import fr.theorozier.webstreamer.display.audio.AudioStreamingSource;
 import fr.theorozier.webstreamer.display.source.YoutubeDisplaySource;
-import fr.theorozier.webstreamer.WebStreamerClientMod;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.minecraft.util.math.Vec3i;
@@ -15,19 +14,11 @@ import org.bytedeco.javacv.Frame;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.net.URI;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.ShortBuffer;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.time.Duration;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -49,7 +40,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             "Chrome/120.0.0.0 Safari/537.36";
 
     private FFmpegFrameGrabber grabber;
-    private Path tempFile;
     private boolean grabberPending = false;
     private volatile boolean grabberReady   = false;
     private boolean grabberFailed  = false;
@@ -200,7 +190,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
         FFmpegLibrary.ensureInitialized();
 
-        Path tmp = null;
         ShortBuffer audioBuf = this.res.allocAudioBuffer();
         if (this.destroyed) {
             this.res.freeAudioBuffer(audioBuf);
@@ -216,30 +205,9 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 this.bufferPool.add(ByteBuffer.allocateDirect(FRAME_BUFFER_SIZE));
             }
 
-            tmp = Files.createTempFile("webstreamer_yt_", ".mp4");
-
-            HttpRequest req = HttpRequest.newBuilder(this.currentUri)
-                    .GET()
-                    .header("User-Agent", USER_AGENT)
-                    .header("Referer", "https://www.youtube.com/")
-                    .timeout(Duration.ofSeconds(60))
-                    .build();
-
-            HttpResponse<InputStream> response = WebStreamerClientMod.YOUTUBE_CLIENT.getHttpClient()
-                    .send(req, HttpResponse.BodyHandlers.ofInputStream());
-
-            if (response.statusCode() != 200) {
-                throw new IOException("HTTP " + response.statusCode() + " downloading video");
-            }
-
-            try (InputStream body = response.body()) {
-                Files.copy(body, tmp, StandardCopyOption.REPLACE_EXISTING);
-            }
-
-            long fileSize = Files.size(tmp);
-            WebStreamerMod.LOGGER.info(makeLog("Downloaded {} bytes to temp file"), fileSize);
-
-            FFmpegFrameGrabber fg = new FFmpegFrameGrabber(tmp.toString());
+            FFmpegFrameGrabber fg = new FFmpegFrameGrabber(this.currentUri.toString());
+            fg.setOption("user_agent", USER_AGENT);
+            fg.setOption("headers", "Referer: https://www.youtube.com/");
             fg.startUnsafe();
 
             Frame frame;
@@ -262,7 +230,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
             if (this.destroyed) {
                 fg.releaseUnsafe();
-                deleteTempFile(tmp);
                 this.res.freeAudioBuffer(audioBuf);
                 this.bufferPool.clear();
                 this.grabberPending = false;
@@ -273,7 +240,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                     .order(ByteOrder.LITTLE_ENDIAN);
 
             this.grabber            = fg;
-            this.tempFile           = tmp;
             this.tempAudioBuffer    = audioBuf;
             this.tempAudioByteBuf   = audioByteBuf;
             this.refTimestamp       = firstFrame != null ? firstFrame.timestamp : 0;
@@ -293,8 +259,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             this.decodeThread.start();
 
         } catch (Exception e) {
-            WebStreamerMod.LOGGER.error(makeLog("Failed to start direct video grabber."), e);
-            deleteTempFile(tmp);
+            WebStreamerMod.LOGGER.error(makeLog("Failed to start video stream."), e);
             this.res.freeAudioBuffer(audioBuf);
             this.bufferPool.clear();
             this.grabberFailed  = true;
@@ -418,8 +383,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         this.pendingVideoFrames.clear();
         this.pendingAudioChunks.clear();
         this.bufferPool.clear();
-        deleteTempFile(this.tempFile);
-        this.tempFile       = null;
         this.grabberReady   = false;
         this.grabberPending = false;
     }
@@ -454,16 +417,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         this.grabberPending = true;
         this.res.getExecutor().submit(this::startGrabberAsync);
         return true;
-    }
-
-    private void deleteTempFile(Path path) {
-        if (path != null) {
-            try {
-                Files.deleteIfExists(path);
-            } catch (IOException e) {
-                WebStreamerMod.LOGGER.warn(makeLog("Could not delete temp file: {}"), path);
-            }
-        }
     }
 
     // -------------------------------------------------------------------------
