@@ -69,6 +69,8 @@ public class DisplayLayerManager extends DisplayLayerMap<DisplayLayerNode.Key> {
         if (path != null) {
             if (path.endsWith(".m3u8")) {
                 return new DisplayLayerHls(key.uri(), this.res);
+            } else if (path.endsWith(".gif")) {
+                return new DisplayLayerGif(key.uri(), this.res);
             } else if (path.endsWith(".jpeg") || path.endsWith(".jpg") || path.endsWith(".bmp") || path.endsWith(".png")) {
                 return new DisplayLayerImage(key.uri(), this.res);
             } else if (path.endsWith(".svg")) {
