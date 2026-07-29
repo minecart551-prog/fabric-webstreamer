@@ -32,7 +32,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     private long pausedPlaybackMicros = 0;
 
     private static final int MAX_FAILED_GRABS = 5;
-    private static final int FRAME_BUFFER_POOL_SIZE = 8;
+    private static final int FRAME_BUFFER_POOL_SIZE = 24;
     private static final int FRAME_BUFFER_SIZE = 1 * 1024 * 1024;
     private static final String USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
@@ -254,10 +254,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             this.grabberReady   = true;
             this.grabberPending = false;
 
-            this.decodeThread = new Thread(this::backgroundDecodeLoop, "WebStreamer-decode");
-            this.decodeThread.setDaemon(true);
-            this.decodeThread.start();
-
         } catch (Exception e) {
             WebStreamerMod.LOGGER.error(makeLog("Failed to start video stream."), e);
             this.res.freeAudioBuffer(audioBuf);
@@ -304,45 +300,51 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         }
     }
 
+    private void startSetup() {
+        this.decodeThread = new Thread(() -> {
+            startGrabberAsync();
+            if (this.grabberReady && !this.destroyed) {
+                backgroundDecodeLoop();
+            }
+        }, "WebStreamer-decode-" + Integer.toHexString(System.identityHashCode(this)));
+        this.decodeThread.setDaemon(true);
+        this.decodeThread.start();
+    }
+
     private void handleAudioFrame(Frame frame) {
         Buffer raw = frame.samples[0];
         int channels = frame.audioChannels;
         int sampleRate = frame.sampleRate;
         long timestamp = frame.timestamp;
 
-        short[] pcm;
         int samples;
-
+        short[] pcm;
         if (raw instanceof ByteBuffer sampleByte) {
             int count = sampleByte.remaining();
+            samples = channels == 2 ? count / 2 : count;
+            pcm = new short[samples];
             if (channels == 2) {
-                samples = count / 2;
-                pcm = new short[samples];
                 for (int i = 0; i < count; i += 2) {
                     short left = (short) (sampleByte.get(i) << 8);
                     short right = (short) (sampleByte.get(i + 1) << 8);
                     pcm[i / 2] = (short) ((left + right) / 2);
                 }
             } else {
-                samples = count;
-                pcm = new short[samples];
                 for (int i = 0; i < count; i++) {
                     pcm[i] = (short) (sampleByte.get(i) << 8);
                 }
             }
         } else if (raw instanceof ShortBuffer sampleShort) {
             int count = sampleShort.remaining();
+            samples = channels == 2 ? count / 2 : count;
+            pcm = new short[samples];
             if (channels == 2) {
-                samples = count / 2;
-                pcm = new short[samples];
                 for (int i = 0; i < count; i += 2) {
                     int left = sampleShort.get(i);
                     int right = sampleShort.get(i + 1);
                     pcm[i / 2] = (short) ((left + right) / 2);
                 }
             } else {
-                samples = count;
-                pcm = new short[samples];
                 for (int i = 0; i < count; i++) {
                     pcm[i] = sampleShort.get(i);
                 }
@@ -415,7 +417,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         this.stopGrabber();
         this.decodeFinished = false;
         this.grabberPending = true;
-        this.res.getExecutor().submit(this::startGrabberAsync);
+        this.startSetup();
         return true;
     }
 
@@ -442,7 +444,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
         if (!this.grabberPending && !this.grabberReady && !this.decodeFinished) {
             this.grabberPending = true;
-            this.res.getExecutor().submit(this::startGrabberAsync);
+            this.startSetup();
             return;
         }
 
@@ -512,9 +514,14 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 long realTimestamp = pvf.timestamp - this.refTimestamp;
                 if (realTimestamp <= this.playbackMicros) {
                     this.pendingVideoFrames.poll();
+                    PooledVideoFrame next;
+                    while ((next = this.pendingVideoFrames.peek()) != null && next.timestamp - this.refTimestamp <= this.playbackMicros) {
+                        this.bufferPool.add(pvf.data);
+                        pvf = this.pendingVideoFrames.poll();
+                    }
                     this.tex.uploadRaw(pvf.data, GL11.GL_RGB8, pvf.width, pvf.height, pvf.stride / 3, GL12.GL_BGR, 4);
                     this.bufferPool.add(pvf.data);
-                    this.playbackMicros = realTimestamp;
+                    this.playbackMicros = pvf.timestamp;
                     framesDisplayed++;
                 } else {
                     break;
