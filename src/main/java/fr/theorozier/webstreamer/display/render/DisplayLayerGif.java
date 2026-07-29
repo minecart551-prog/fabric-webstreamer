@@ -6,21 +6,30 @@ import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
 import org.bytedeco.javacv.Frame;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL12;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Duration;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 @Environment(EnvType.CLIENT)
 public class DisplayLayerGif extends DisplayLayerSimple {
 
     private static final int MAX_FAILED_GRABS = 5;
+    private static final int FRAME_BUFFER_POOL_SIZE = 4;
+    private static final int FRAME_BUFFER_SIZE = 512 * 1024;
     private static final String USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
                     "AppleWebKit/537.36 (KHTML, like Gecko) " +
@@ -33,10 +42,30 @@ public class DisplayLayerGif extends DisplayLayerSimple {
     private boolean grabberFailed = false;
     private boolean grabberFailureLogged = false;
     private int failedGrabs = 0;
-    private Frame lastFrame = null;
 
     private long lastTickNanos = 0;
     private long playbackMicros = 0;
+
+    private final Queue<PooledGifFrame> pendingFrames = new ConcurrentLinkedQueue<>();
+    private final LinkedBlockingQueue<ByteBuffer> bufferPool = new LinkedBlockingQueue<>();
+    private Thread decodeThread;
+    private volatile boolean decodeFinished = false;
+
+    private static class PooledGifFrame {
+        final ByteBuffer data;
+        final int width;
+        final int height;
+        final int stride;
+        final long timestamp;
+
+        PooledGifFrame(ByteBuffer data, int width, int height, int stride, long timestamp) {
+            this.data = data;
+            this.width = width;
+            this.height = height;
+            this.stride = stride;
+            this.timestamp = timestamp;
+        }
+    }
 
     public DisplayLayerGif(URI uri, DisplayLayerResources res) {
         super(uri, res);
@@ -62,7 +91,18 @@ public class DisplayLayerGif extends DisplayLayerSimple {
         return this.grabberFailed;
     }
 
-    private void startGrabberAsync() {
+    private void startSetup() {
+        this.decodeThread = new Thread(() -> {
+            downloadAndOpenGrabber();
+            if (this.grabberReady && !this.destroyed) {
+                backgroundDecodeLoop();
+            }
+        }, "WebStreamer-gif-" + Integer.toHexString(System.identityHashCode(this)));
+        this.decodeThread.setDaemon(true);
+        this.decodeThread.start();
+    }
+
+    private void downloadAndOpenGrabber() {
         if (this.destroyed) return;
 
         FFmpegLibrary.ensureInitialized();
@@ -101,6 +141,11 @@ public class DisplayLayerGif extends DisplayLayerSimple {
             this.tempFile = tmp;
             this.playbackMicros = 0;
             this.lastTickNanos = System.nanoTime();
+
+            for (int i = 0; i < FRAME_BUFFER_POOL_SIZE; i++) {
+                this.bufferPool.add(ByteBuffer.allocateDirect(FRAME_BUFFER_SIZE));
+            }
+
             this.grabberReady = true;
             this.grabberPending = false;
 
@@ -112,25 +157,40 @@ public class DisplayLayerGif extends DisplayLayerSimple {
         }
     }
 
-    private void stopGrabber() {
-        if (!this.grabberReady && !this.grabberPending) return;
-        if (this.grabber != null) {
-            try { this.grabber.releaseUnsafe(); } catch (Exception ignored) { }
-            this.grabber = null;
-        }
-        this.lastFrame = null;
-        deleteTempFile(this.tempFile);
-        this.tempFile = null;
-        this.grabberReady = false;
-        this.grabberPending = false;
-    }
-
-    private void deleteTempFile(Path path) {
-        if (path != null) {
-            try {
-                Files.deleteIfExists(path);
-            } catch (IOException e) {
-                WebStreamerMod.LOGGER.warn(makeLog("Could not delete temp file: {}"), path);
+    private void backgroundDecodeLoop() {
+        try {
+            while (!this.destroyed && !this.decodeFinished) {
+                ByteBuffer buf = this.bufferPool.poll(100, TimeUnit.MILLISECONDS);
+                if (buf == null) {
+                    continue;
+                }
+                Frame frame = this.grabber.grab();
+                if (frame == null) {
+                    this.bufferPool.add(buf);
+                    this.loopGif();
+                    continue;
+                }
+                if (frame.image != null) {
+                    ByteBuffer src = (ByteBuffer) frame.image[0];
+                    int srcPos = src.position();
+                    int needed = src.remaining();
+                    if (buf.capacity() < needed) {
+                        buf = ByteBuffer.allocateDirect(needed);
+                    }
+                    buf.clear();
+                    buf.put(src);
+                    src.position(srcPos);
+                    buf.flip();
+                    this.pendingFrames.add(new PooledGifFrame(buf, frame.imageWidth, frame.imageHeight, frame.imageStride, frame.timestamp));
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            if (!this.destroyed) {
+                WebStreamerMod.LOGGER.error(makeLog("Background GIF decode failed"), e);
+                this.grabberFailed = true;
+                this.decodeFinished = true;
             }
         }
     }
@@ -139,7 +199,7 @@ public class DisplayLayerGif extends DisplayLayerSimple {
         WebStreamerMod.LOGGER.debug(makeLog("GIF loop restart"));
         this.playbackMicros = 0;
         this.lastTickNanos = System.nanoTime();
-        this.lastFrame = null;
+        this.pendingFrames.clear();
         if (this.grabber != null) {
             try {
                 this.grabber.releaseUnsafe();
@@ -156,9 +216,39 @@ public class DisplayLayerGif extends DisplayLayerSimple {
         }
     }
 
+    private void stopGrabber() {
+        if (!this.grabberReady && !this.grabberPending) return;
+        this.decodeFinished = true;
+        Thread dt = this.decodeThread;
+        this.decodeThread = null;
+        if (dt != null) {
+            dt.interrupt();
+            try { dt.join(2000); } catch (InterruptedException ignored) { }
+        }
+        if (this.grabber != null) {
+            try { this.grabber.releaseUnsafe(); } catch (Exception ignored) { }
+            this.grabber = null;
+        }
+        this.pendingFrames.clear();
+        this.bufferPool.clear();
+        deleteTempFile(this.tempFile);
+        this.tempFile = null;
+        this.grabberReady = false;
+        this.grabberPending = false;
+    }
+
+    private void deleteTempFile(Path path) {
+        if (path != null) {
+            try {
+                Files.deleteIfExists(path);
+            } catch (IOException e) {
+                WebStreamerMod.LOGGER.warn(makeLog("Could not delete temp file: {}"), path);
+            }
+        }
+    }
+
     @Override
     public void tick() {
-        if (this.destroyed) return;
         if (this.destroyed) return;
 
         this.lastUse = System.nanoTime();
@@ -173,7 +263,7 @@ public class DisplayLayerGif extends DisplayLayerSimple {
 
         if (!this.grabberPending && !this.grabberReady) {
             this.grabberPending = true;
-            this.res.getExecutor().submit(this::startGrabberAsync);
+            this.startSetup();
             return;
         }
 
@@ -186,36 +276,20 @@ public class DisplayLayerGif extends DisplayLayerSimple {
         this.lastTickNanos = now;
 
         try {
-            if (this.lastFrame != null && this.lastFrame.image != null) {
-                if (this.lastFrame.timestamp <= this.playbackMicros) {
-                    this.tex.upload(this.lastFrame);
+            PooledGifFrame frame;
+            while ((frame = this.pendingFrames.peek()) != null) {
+                if (frame.timestamp <= this.playbackMicros) {
+                    this.pendingFrames.poll();
+                    this.tex.uploadRaw(frame.data, GL11.GL_RGB8, frame.width, frame.height, frame.stride / 3, GL12.GL_BGR, 4);
+                    this.bufferPool.add(frame.data);
                     this.failedGrabs = 0;
-                    this.lastFrame = null;
                 } else {
-                    return;
+                    break;
                 }
             }
-
-            Frame frame;
-            while ((frame = this.grabber.grab()) != null) {
-                if (frame.image != null) {
-                    if (frame.timestamp <= this.playbackMicros) {
-                        this.tex.upload(frame);
-                        this.failedGrabs = 0;
-                    } else {
-                        this.lastFrame = frame;
-                        break;
-                    }
-                }
-            }
-
-            if (frame == null) {
-                this.loopGif();
-            }
-
         } catch (Exception e) {
             this.failedGrabs++;
-            WebStreamerMod.LOGGER.error(makeLog("Failed to grab GIF frame ({}/{})."),
+            WebStreamerMod.LOGGER.error(makeLog("Failed to process GIF frame ({}/{})."),
                     this.failedGrabs, MAX_FAILED_GRABS, e);
             if (this.failedGrabs >= MAX_FAILED_GRABS) {
                 this.stopGrabber();

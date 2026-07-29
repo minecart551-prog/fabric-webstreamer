@@ -218,6 +218,10 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                     if (buf != null) {
                         ByteBuffer src = (ByteBuffer) frame.image[0];
                         int srcPos = src.position();
+                        int needed = src.remaining();
+                        if (buf.capacity() < needed) {
+                            buf = ByteBuffer.allocateDirect(needed);
+                        }
                         buf.clear();
                         buf.put(src);
                         src.position(srcPos);
@@ -279,6 +283,10 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 if (frame.image != null) {
                     ByteBuffer src = (ByteBuffer) frame.image[0];
                     int srcPos = src.position();
+                    int needed = src.remaining();
+                    if (buf.capacity() < needed) {
+                        buf = ByteBuffer.allocateDirect(needed);
+                    }
                     buf.clear();
                     buf.put(src);
                     src.position(srcPos);
