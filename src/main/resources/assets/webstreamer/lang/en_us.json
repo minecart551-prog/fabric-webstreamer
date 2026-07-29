@@ -19,6 +19,7 @@
   "gui.webstreamer.display.quality": "Quality",
   "gui.webstreamer.display.audioDistance": "Distance",
   "gui.webstreamer.display.audioVolume": "Volume",
+  "gui.webstreamer.display.brightness": "Brightness",
   "gui.webstreamer.display.error.pending": "Error: waiting a background task",
   "gui.webstreamer.display.error.invalidSize": "Invalid size",
   "gui.webstreamer.display.error.invalidOffset": "Invalid offset values",

@@ -15,6 +15,7 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.font.TextRenderer.TextLayerType;
 import net.minecraft.client.render.GameRenderer;
+import net.minecraft.client.render.OverlayTexture;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.render.VertexConsumerProvider;
@@ -255,11 +256,18 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
                 // TV models use a shallower depth to align with the front face.
                 float quadZ = isTV ? 0.01f : -0.55f;
 
+                float brightness = entity.getBrightness();
+                int br = (int)(brightness * 255f);
+                int bg = (int)(brightness * 255f);
+                int bb = (int)(brightness * 255f);
+                int ba = 255;
+                int maxLight = 15728880;
+
                 Matrix4f positionMatrix = matrices.peek().getPositionMatrix();
-                buffer.vertex(positionMatrix,  hw, -hh, quadZ).texture(0, 1).next();
-                buffer.vertex(positionMatrix, -hw, -hh, quadZ).texture(1, 1).next();
-                buffer.vertex(positionMatrix, -hw,  hh, quadZ).texture(1, 0).next();
-                buffer.vertex(positionMatrix,  hw,  hh, quadZ).texture(0, 0).next();
+                buffer.vertex(positionMatrix,  hw, -hh, quadZ).color(br, bg, bb, ba).texture(0, 1).light(maxLight).overlay(OverlayTexture.DEFAULT_UV).normal(0f, 0f, 1f).next();
+                buffer.vertex(positionMatrix, -hw, -hh, quadZ).color(br, bg, bb, ba).texture(1, 1).light(maxLight).overlay(OverlayTexture.DEFAULT_UV).normal(0f, 0f, 1f).next();
+                buffer.vertex(positionMatrix, -hw,  hh, quadZ).color(br, bg, bb, ba).texture(1, 0).light(maxLight).overlay(OverlayTexture.DEFAULT_UV).normal(0f, 0f, 1f).next();
+                buffer.vertex(positionMatrix,  hw,  hh, quadZ).color(br, bg, bb, ba).texture(0, 0).light(maxLight).overlay(OverlayTexture.DEFAULT_UV).normal(0f, 0f, 1f).next();
 
             } catch (DisplayLayerNode.OutOfLayerException e) {
                 statusText = NO_LAYER_AVAILABLE_TEXT;

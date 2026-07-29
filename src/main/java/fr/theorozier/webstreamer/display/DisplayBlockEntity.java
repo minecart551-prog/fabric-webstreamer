@@ -71,6 +71,7 @@ public class DisplayBlockEntity extends BlockEntity {
     private double offsetZ = 0.0;
     private boolean requiresOp = false;
     private boolean playbackPaused = false;
+    private float brightness = 1f;
 
     protected DisplayBlockEntity(net.minecraft.block.entity.BlockEntityType<? extends DisplayBlockEntity> type, BlockPos pos, BlockState state) {
         super(type, pos, state);
@@ -178,6 +179,15 @@ public class DisplayBlockEntity extends BlockEntity {
         this.playbackPaused = playbackPaused;
     }
 
+    public float getBrightness() {
+        return this.brightness;
+    }
+
+    public void setBrightness(float brightness) {
+        this.brightness = Math.max(0f, Math.min(1f, brightness));
+        this.markDirty();
+    }
+
     @Override
     protected void writeNbt(NbtCompound nbt) {
 
@@ -195,6 +205,7 @@ public class DisplayBlockEntity extends BlockEntity {
         displayNbt.putDouble("offsetZ", this.offsetZ);
         displayNbt.putBoolean("requiresOp", this.requiresOp);
         displayNbt.putBoolean("playbackPaused", this.playbackPaused);
+        displayNbt.putFloat("brightness", this.brightness);
 
         if (this.source != null) {
             displayNbt.putString("type", this.source.getType());
@@ -264,6 +275,12 @@ public class DisplayBlockEntity extends BlockEntity {
                 this.playbackPaused = playbackPaused.byteValue() != 0;
             } else {
                 this.playbackPaused = false;
+            }
+
+            if (displayNbt.get("brightness") instanceof NbtFloat brightness) {
+                this.brightness = Math.max(0f, Math.min(1f, brightness.floatValue()));
+            } else {
+                this.brightness = 1f;
             }
 
             if (displayNbt.get("type") instanceof NbtString type) {

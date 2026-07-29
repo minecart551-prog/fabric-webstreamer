@@ -1,15 +1,11 @@
 package fr.theorozier.webstreamer.display.render;
 
-import com.mojang.blaze3d.systems.RenderSystem;
-import fr.theorozier.webstreamer.WebStreamerMod;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
+import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.RenderLayer;
-import net.minecraft.client.render.RenderPhase;
-import net.minecraft.client.render.VertexFormat;
-import net.minecraft.client.render.VertexFormats;
+import net.minecraft.util.Identifier;
 import net.minecraft.util.math.Vec3i;
-import org.lwjgl.opengl.GL11;
 
 import java.net.URI;
 
@@ -24,7 +20,8 @@ public abstract class DisplayLayerSimple implements DisplayLayerNode, DisplayLay
 	protected URI uri;
 	protected final DisplayLayerResources res;
 	protected final DisplayTexture tex;
-	private final DisplayRenderLayer renderLayer;
+	private final Identifier textureId;
+	private final RenderLayer renderLayer;
 	
 	// Timing //
 	/** Time in nanoseconds (monotonic) of the last use. */
@@ -53,15 +50,19 @@ public abstract class DisplayLayerSimple implements DisplayLayerNode, DisplayLay
 		this.uri = uri;
 		this.res = res;
 		this.tex = new DisplayTexture();
-		this.renderLayer = new DisplayRenderLayer(this);
+		this.textureId = new Identifier("webstreamer", Integer.toHexString(System.identityHashCode(this)));
+		MinecraftClient.getInstance().getTextureManager().registerTexture(this.textureId, this.tex);
+		this.renderLayer = RenderLayer.getEntityCutoutNoCull(this.textureId);
 		this.lastUse = System.nanoTime();
 	}
 
 	@Override
 	public boolean cleanup(long now) {
-		// Only release resources on forced cleanup (now == 0), such as when the
-		// client world is unloaded or the player disconnects.
 		if (now == 0) {
+			MinecraftClient client = MinecraftClient.getInstance();
+			if (client != null) {
+				client.getTextureManager().destroyTexture(this.textureId);
+			}
 			this.tex.clearGlId();
 			return true;
 		} else {
@@ -94,28 +95,8 @@ public abstract class DisplayLayerSimple implements DisplayLayerNode, DisplayLay
 		return this.tex.isReady();
 	}
 
-	/**
-	 * Internal function to prepare a log message for this specific layer.
-	 * @param message The log message format to append to the header.
-	 * @return The log message ready to format.
-	 */
 	protected String makeLog(String message) {
 		return String.format("[%s:%08X] ", this.getClass().getSimpleName(), this.uri.hashCode()) + message;
-	}
-
-	private static class DisplayRenderLayer extends RenderLayer {
-		private DisplayRenderLayer(DisplayLayerSimple layer) {
-			super("display", VertexFormats.POSITION_TEXTURE, VertexFormat.DrawMode.QUADS,
-					256, false, true,
-					() -> {
-						layer.lastUse = System.nanoTime();
-						RenderPhase.POSITION_TEXTURE_PROGRAM.startDrawing();
-						RenderSystem.enableDepthTest();
-						RenderSystem.depthFunc(GL11.GL_LEQUAL);
-						RenderSystem.setShaderTexture(0, layer.tex.getGlId());
-					},
-					RenderSystem::disableDepthTest);
-		}
 	}
 	
 }

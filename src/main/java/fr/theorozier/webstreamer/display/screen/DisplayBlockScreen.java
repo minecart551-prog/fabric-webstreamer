@@ -55,6 +55,7 @@ public class DisplayBlockScreen extends Screen {
     private static final Text QUALITY_TEXT = Text.translatable("gui.webstreamer.display.quality");
     private static final String AUDIO_DISTANCE_TEXT_KEY = "gui.webstreamer.display.audioDistance";
     private static final String AUDIO_VOLUME_TEXT_KEY = "gui.webstreamer.display.audioVolume";
+    private static final String BRIGHTNESS_TEXT_KEY = "gui.webstreamer.display.brightness";
 
     private static final Text ERR_PENDING = Text.translatable("gui.webstreamer.display.error.pending");
     private static final Text ERR_INVALID_SIZE = Text.translatable("gui.webstreamer.display.error.invalidSize");
@@ -87,6 +88,7 @@ public class DisplayBlockScreen extends Screen {
     private TextFieldWidget widthField, heightField, offsetXField, offsetYField, offsetZField;
     private AudioDistanceSliderWidget audioDistanceSlider;
     private AudioVolumeSliderWidget audioVolumeSlider;
+    private BrightnessSliderWidget brightnessSlider;
     private ButtonWidget sourceTypeButton;
     private SourceType sourceType;
     private TextWidget errorText;
@@ -368,6 +370,12 @@ public class DisplayBlockScreen extends Screen {
 
         }
 
+        float brightnessVal = brightnessSlider == null ? this.display.getBrightness() : brightnessSlider.getBrightness();
+        brightnessSlider = new BrightnessSliderWidget(xHalf - 154, ySourceBottom, 308, 20, brightnessVal);
+        brightnessSlider.setChangedListener(val -> this.dirty = true);
+        this.addDrawableChild(brightnessSlider);
+        ySourceBottom += 26;
+
         errorText = new TextWidget(this.width, 0, Text.empty(), this.textRenderer);
         errorText.setPosition(0, ySourceBottom);
         errorText.setTextColor(0xFF6052);
@@ -612,6 +620,7 @@ public class DisplayBlockScreen extends Screen {
             boolean isBaseDisplay = this.display.getCachedState().getBlock() instanceof DisplayBlock && !(this.display.getCachedState().getBlock() instanceof WebDisplayPBlock);
             audioDistance = Math.min(audioDistance, isBaseDisplay ? 512f : 64f);
             this.display.setAudioConfig(audioDistance, audioVolume);
+            this.display.setBrightness(this.brightnessSlider.getBrightness());
 
             if (sourceType == SourceType.RAW) {
                 this.display.setSource(new RawDisplaySource(rawUri));
@@ -974,6 +983,35 @@ public class DisplayBlockScreen extends Screen {
         protected void updateMessage() {
             Text text = (this.value == 0.0) ? ScreenTexts.OFF : Text.literal((int)(this.value * 100.0) + "%");
             this.setMessage(Text.translatable(AUDIO_VOLUME_TEXT_KEY).append(": ").append(text));
+        }
+
+        @Override
+        protected void applyValue() {
+            this.changedListener.accept((float) this.value);
+        }
+
+    }
+
+    private static class BrightnessSliderWidget extends SliderWidget {
+
+        private Consumer<Float> changedListener;
+
+        public BrightnessSliderWidget(int x, int y, int width, int height, float value) {
+            super(x, y, width, height, Text.empty(), value);
+            this.updateMessage();
+        }
+
+        public void setChangedListener(Consumer<Float> changedListener) {
+            this.changedListener = changedListener;
+        }
+
+        public float getBrightness() {
+            return (float) this.value;
+        }
+
+        @Override
+        protected void updateMessage() {
+            this.setMessage(Text.translatable(BRIGHTNESS_TEXT_KEY).append(": ").append(Integer.toString((int)(this.value * 100.0)) + "%"));
         }
 
         @Override
