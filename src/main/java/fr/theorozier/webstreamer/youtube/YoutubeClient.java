@@ -45,18 +45,10 @@ import java.util.regex.Pattern;
 @Environment(EnvType.CLIENT)
 public class YoutubeClient {
 
-    // Android YouTube app client context — same values yt-dlp uses.
-    private static final String ANDROID_CLIENT_NAME    = "ANDROID";
-    private static final int    ANDROID_CLIENT_VERSION_INT = 17;
-    private static final String ANDROID_CLIENT_VERSION = "20.50.13";
-    private static final String ANDROID_OS_VERSION     = "14";
-    private static final String ANDROID_SDK_VERSION    = "35";
-    private static final String ANDROID_USER_AGENT     =
-            "com.google.android.youtube/" + ANDROID_CLIENT_VERSION +
-                    " (Linux; U; Android " + ANDROID_OS_VERSION +
-                    "; gb) gzip";
-
-    // YouTube internal API key (public, same one yt-dlp and many other tools use).
+    // Android VR (Oculus Quest) client context — same values yt-dlp uses.
+    // This client returns direct signed URLs without cipher, works without poToken.
+    // Since 2026.07, intermittent POT enforcement has been observed, so we also
+    // define ANDROID and IOS as fallbacks.
     private static final String API_KEY =
             "AIzaSyA8eiZmM1fanX44NAnt95JaAMuqFROH_AI";
 
@@ -64,8 +56,43 @@ public class YoutubeClient {
             "https://www.youtube.com/youtubei/v1/player?key=" + API_KEY +
                     "&prettyPrint=false";
 
+    private record InnertubeClient(
+            String clientName, int clientNameInt, String clientVersion,
+            String userAgent, JsonObject contextClient) {}
+
+    private static final InnertubeClient[] INNERTUBE_CLIENTS = {
+        // ANDROID_VR — primary, best geo-bypass, no cipher
+        new InnertubeClient(
+            "ANDROID_VR", 28, "1.65.10",
+            "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
+            buildClientContext("ANDROID_VR", "1.65.10", 32, "12L", "Oculus", "Quest 3")),
+        // ANDROID — fallback, also no cipher
+        new InnertubeClient(
+            "ANDROID", 3, "21.26.364",
+            "com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip",
+            buildClientContext("ANDROID", "21.26.364", 30, "11", null, null)),
+        // IOS — second fallback, direct URLs
+        new InnertubeClient(
+            "IOS", 5, "21.26.4",
+            "com.google.ios.youtube/21.26.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)",
+            buildClientContext("IOS", "21.26.4", -1, "18.3.2.22D82", "Apple", "iPhone16,2")),
+    };
+
+    private static JsonObject buildClientContext(String name, String version, int sdk, String os,
+                                                  String deviceMake, String deviceModel) {
+        JsonObject c = new JsonObject();
+        c.addProperty("clientName", name);
+        c.addProperty("clientVersion", version);
+        if (sdk >= 0) c.addProperty("androidSdkVersion", sdk);
+        c.addProperty("osName", name.startsWith("IOS") ? "iPhone" : "Android");
+        c.addProperty("osVersion", os);
+        if (deviceMake != null) c.addProperty("deviceMake", deviceMake);
+        if (deviceModel != null) c.addProperty("deviceModel", deviceModel);
+        return c;
+    }
+
     private static final String WEB_USER_AGENT =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
 
     // Known progressive (video+audio combined) itags.
     private static final HashMap<Integer, String> KNOWN_ITAGS = new HashMap<>();
@@ -340,33 +367,47 @@ public class YoutubeClient {
             throw new YoutubeException(YoutubeExceptionType.INVALID_VIDEO_ID);
         }
 
-        // Build the Android client JSON body.
-        // This is exactly what yt-dlp sends for its "android" extractor.
-        JsonObject context = new JsonObject();
+        // Try each innertube client in order until one succeeds.
+        YoutubeException lastException = null;
+        for (InnertubeClient ic : INNERTUBE_CLIENTS) {
+            try {
+                Playlist result = fetchPlaylistWithClient(videoId, ic);
+                return result;
+            } catch (YoutubeException e) {
+                lastException = e;
+                if (e.getExceptionType() == YoutubeExceptionType.VIDEO_NOT_FOUND ||
+                    e.getExceptionType() == YoutubeExceptionType.INVALID_VIDEO_ID ||
+                    e.getExceptionType() == YoutubeExceptionType.NO_STREAMS) {
+                    // These are definitive failures, don't try other clients.
+                    throw e;
+                }
+                WebStreamerMod.LOGGER.warn("YouTube client {} failed for {}: {}",
+                        ic.clientName, videoId, e.getMessage());
+            }
+        }
+        throw lastException;
+    }
 
-        JsonObject client = new JsonObject();
-        client.addProperty("clientName",          ANDROID_CLIENT_NAME);
-        client.addProperty("clientVersion",       ANDROID_CLIENT_VERSION);
-        client.addProperty("androidSdkVersion",   Integer.parseInt(ANDROID_SDK_VERSION));
-        client.addProperty("osName",              "Android");
-        client.addProperty("osVersion",           ANDROID_OS_VERSION);
-        client.addProperty("platform",            "MOBILE");
-        context.add("client", client);
+    private Playlist fetchPlaylistWithClient(String videoId, InnertubeClient ic)
+            throws YoutubeException, IOException, InterruptedException, URISyntaxException {
+
+        JsonObject context = new JsonObject();
+        context.add("client", ic.contextClient);
 
         JsonObject body = new JsonObject();
-        body.add("context",    context);
-        body.addProperty("videoId",      videoId);
+        body.add("context", context);
+        body.addProperty("videoId", videoId);
         body.addProperty("contentCheckOk", true);
-        body.addProperty("racyCheckOk",    true);
+        body.addProperty("racyCheckOk", true);
 
         String bodyJson = gson.toJson(body);
 
         HttpRequest request = HttpRequest.newBuilder(URI.create(PLAYER_URL))
                 .POST(HttpRequest.BodyPublishers.ofString(bodyJson))
                 .header("Content-Type",  "application/json")
-                .header("User-Agent",    ANDROID_USER_AGENT)
-                .header("X-YouTube-Client-Name",    String.valueOf(ANDROID_CLIENT_VERSION_INT))
-                .header("X-YouTube-Client-Version", ANDROID_CLIENT_VERSION)
+                .header("User-Agent",    ic.userAgent)
+                .header("X-YouTube-Client-Name",    String.valueOf(ic.clientNameInt))
+                .header("X-YouTube-Client-Version", ic.clientVersion)
                 .timeout(Duration.ofSeconds(15))
                 .build();
 

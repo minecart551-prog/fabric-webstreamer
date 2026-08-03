@@ -277,8 +277,13 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 Frame frame = this.grabber.grab();
                 if (frame == null) {
                     this.bufferPool.add(buf);
-                    this.decodeFinished = true;
-                    break;
+                    if (this.display != null && this.display.getSource() instanceof YoutubeDisplaySource yt
+                            && yt.hasPlaylist()) {
+                        this.decodeFinished = true;
+                        break;
+                    }
+                    this.loopVideo();
+                    continue;
                 }
                 if (frame.image != null) {
                     ByteBuffer src = (ByteBuffer) frame.image[0];
@@ -427,6 +432,32 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         this.grabberPending = true;
         this.startSetup();
         return true;
+    }
+
+    private void loopVideo() {
+        WebStreamerMod.LOGGER.debug(makeLog("Video loop restart"));
+        this.playbackMicros = 0;
+        this.refTimestamp = -1;
+        this.lastTickNanos = System.nanoTime();
+        this.lastDecodedAudioTs = 0;
+        this.pendingVideoFrames.clear();
+        this.pendingAudioChunks.clear();
+        if (this.grabber != null) {
+            try {
+                this.grabber.releaseUnsafe();
+            } catch (Exception ignored) { }
+            try {
+                FFmpegFrameGrabber fg = new FFmpegFrameGrabber(this.currentUri.toString());
+                fg.setOption("user_agent", USER_AGENT);
+                fg.setOption("headers", "Referer: https://www.youtube.com/");
+                fg.startUnsafe();
+                this.grabber = fg;
+            } catch (Exception e) {
+                WebStreamerMod.LOGGER.error(makeLog("Failed to loop video."), e);
+                this.stopGrabber();
+                this.grabberFailed = true;
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
