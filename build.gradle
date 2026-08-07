@@ -29,7 +29,7 @@ dependencies {
 
 	include "org.bytedeco:javacv:${project.javacv_version}"
 	include "org.bytedeco:javacpp:${project.javacv_version}"
-	include "org.bytedeco:ffmpeg:5.0-${project.javacv_version}"
+	include "org.bytedeco:ffmpeg:6.0-${project.javacv_version}"
 }
 
 processResources {
