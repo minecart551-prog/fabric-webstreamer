@@ -50,7 +50,10 @@ public final class WebStreamerNativesManager {
     private static final String NATIVES_SUBDIR = "webstreamer/natives";
 
     // Must match the FFmpeg version from gradle.properties (javacv_version)
-    private static final String JAVACV_VERSION = "1.5.7";
+    private static final String JAVACV_VERSION = "1.5.10";
+    private static final String FFMPEG_VERSION = "6.1.1";
+    private static final String EXPECTED_NATIVE_VERSION = FFMPEG_VERSION + "-" + JAVACV_VERSION;
+    private static final String VERSION_MARKER = ".version";
 
     private static boolean downloadAttempted = false;
 
@@ -82,6 +85,14 @@ public final class WebStreamerNativesManager {
         }
 
         Path nativesDir = FabricLoader.getInstance().getGameDir().resolve(NATIVES_SUBDIR);
+        Path versionFile = nativesDir.resolve(VERSION_MARKER);
+
+        // 0. Check if cached natives match the expected version.
+        //    If stale (version mismatch or no marker), delete old DLLs so fresh ones are downloaded.
+        if (!isNativesVersionCurrent(versionFile)) {
+            WebStreamerMod.LOGGER.info("[WebStreamer] Natives version mismatch or missing, clearing cached natives");
+            clearStaleNatives(nativesDir);
+        }
 
         // 1. Check flat directory (recommended — download goes here)
         if (hasNativeFiles(nativesDir)) {
@@ -105,6 +116,12 @@ public final class WebStreamerNativesManager {
 
         try {
             downloadPlatformNatives(nativesDir, platform);
+            // Write version marker so we can detect stale natives on next launch
+            try {
+                Files.writeString(versionFile, EXPECTED_NATIVE_VERSION);
+            } catch (IOException e) {
+                WebStreamerMod.LOGGER.debug("[WebStreamer] Could not write version marker", e);
+            }
             addToLibraryPath(nativesDir);
             return true;
         } catch (Exception e) {
@@ -122,7 +139,7 @@ public final class WebStreamerNativesManager {
     private static void downloadPlatformNatives(Path nativesDir, String platform)
             throws IOException, InterruptedException {
 
-        String version = "5.0-" + JAVACV_VERSION;
+        String version = FFMPEG_VERSION + "-" + JAVACV_VERSION;
         String jarUrl = "https://repo1.maven.org/maven2/org/bytedeco/ffmpeg/"
                 + version + "/ffmpeg-" + version + "-" + platform + ".jar";
 
@@ -310,6 +327,42 @@ public final class WebStreamerNativesManager {
         } catch (IOException ignored) {
         }
         return false;
+    }
+
+    /**
+     * Check if the version marker file matches the expected native version.
+     */
+    private static boolean isNativesVersionCurrent(Path versionFile) {
+        try {
+            if (!Files.exists(versionFile)) return false;
+            String stored = Files.readString(versionFile).trim();
+            return EXPECTED_NATIVE_VERSION.equals(stored);
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Delete all native library files and the version marker from the natives directory.
+     */
+    private static void clearStaleNatives(Path nativesDir) {
+        if (!Files.isDirectory(nativesDir)) return;
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(nativesDir)) {
+            int deleted = 0;
+            for (Path entry : stream) {
+                String name = entry.getFileName().toString().toLowerCase();
+                if (name.endsWith(".dll") || name.endsWith(".so") || name.endsWith(".dylib")
+                        || name.equals(VERSION_MARKER)) {
+                    Files.deleteIfExists(entry);
+                    deleted++;
+                }
+            }
+            if (deleted > 0) {
+                WebStreamerMod.LOGGER.info("[WebStreamer] Deleted {} stale native file(s)", deleted);
+            }
+        } catch (IOException e) {
+            WebStreamerMod.LOGGER.warn("[WebStreamer] Failed to clean stale natives", e);
+        }
     }
 
     /**
