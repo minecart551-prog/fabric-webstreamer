@@ -59,14 +59,20 @@ public abstract class DisplayLayerSimple implements DisplayLayerNode, DisplayLay
 
 	@Override
 	public boolean cleanup(long now) {
-		// Only release resources on forced cleanup (now == 0), such as when the
+		// Forced cleanup (now == 0): release resources immediately, e.g. when the
 		// client world is unloaded or the player disconnects.
 		if (now == 0) {
 			this.tex.clearGlId();
 			return true;
-		} else {
-			return false;
 		}
+		// Remove layers that have not been rendered for over 60 seconds. This
+		// prevents orphan layers (from broken/removed display blocks) from
+		// accumulating and exhausting the layer cost budget.
+		if (now - this.lastUse > 60L * 1_000_000_000L) {
+			this.tex.clearGlId();
+			return true;
+		}
+		return false;
 	}
 
 	@Override

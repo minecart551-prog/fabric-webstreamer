@@ -1,6 +1,7 @@
 package fr.theorozier.webstreamer.display.render;
 
 import com.mojang.blaze3d.systems.RenderSystem;
+import fr.theorozier.webstreamer.WebStreamerMod;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import org.jetbrains.annotations.NotNull;
@@ -14,7 +15,7 @@ import java.net.URI;
 public class DisplayLayerManager extends DisplayLayerMap<DisplayLayerNode.Key> {
 
     /** Max cost for concurrent layers. */
-    private static final int MAX_LAYERS_COST = 20 * 30;  // Approx 20 HLS layers.
+    private static final int MAX_LAYERS_COST = 30 * 30;  // Approx 30 HLS layers.
 
     /** Interval of cleanups for unused display layers. */
     private static final long CLEANUP_INTERVAL = 1L * 1000000000L;
@@ -24,6 +25,10 @@ public class DisplayLayerManager extends DisplayLayerMap<DisplayLayerNode.Key> {
 
     /** Time in nanoseconds (monotonic) of the last cleanup for unused layers. */
     private long lastCleanup = 0;
+
+    /** Rate-limit the cost warning to avoid log spam. */
+    private long lastCostWarning = 0;
+    private static final long COST_WARNING_INTERVAL = 30L * 1_000_000_000L;
 
     public DisplayLayerResources getResources() {
         return this.res;
@@ -62,6 +67,12 @@ public class DisplayLayerManager extends DisplayLayerMap<DisplayLayerNode.Key> {
         this.cleanupLayersIf(existingKey -> existingKey.display() == key.display() && !existingKey.uri().equals(key.uri()), 0);
 
         if (this.cost() >= MAX_LAYERS_COST) {
+            long now = System.nanoTime();
+            if (now - this.lastCostWarning >= COST_WARNING_INTERVAL) {
+                this.lastCostWarning = now;
+                WebStreamerMod.LOGGER.warn("Layer cost limit reached ({}/{}), cannot create new layer for {}",
+                        this.cost(), MAX_LAYERS_COST, key.uri());
+            }
             throw new OutOfLayerException();
         }
 

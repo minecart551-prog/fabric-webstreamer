@@ -26,6 +26,10 @@ import java.util.concurrent.Future;
 public class DisplayLayerImage extends DisplayLayerSimple {
 	
 	private static final long FAILING_IMAGE_REQUEST_INTERVAL = 30L * 1000000000L;
+	private static final String USER_AGENT =
+			"Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+			"AppleWebKit/537.36 (KHTML, like Gecko) " +
+			"Chrome/120.0.0.0 Safari/537.36";
 	
 	private long imageNextRequestTimestamp = 0;
 	private boolean imageUploaded = false;
@@ -80,7 +84,9 @@ public class DisplayLayerImage extends DisplayLayerSimple {
 
 	protected STBLoadedImage requestImageBlocking() throws IOException {
 		try {
-			HttpRequest request = HttpRequest.newBuilder(this.uri).GET().timeout(Duration.ofSeconds(5)).build();
+			HttpRequest request = HttpRequest.newBuilder(this.uri).GET()
+					.header("User-Agent", USER_AGENT)
+					.timeout(Duration.ofSeconds(5)).build();
 			HttpResponse<InputStream> res = this.res.getHttpClient().send(request, HttpResponse.BodyHandlers.ofInputStream());
 			if (res.statusCode() == 200) {
 				return this.readImageBlocking(res.body());
