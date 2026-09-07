@@ -106,6 +106,7 @@ public class DisplayBlockScreen extends Screen {
     private YoutubeClient.YoutubeException youtubePlaylistExc;
     private ButtonWidget youtubePrevButton;
     private ButtonWidget youtubeNextButton;
+    private ButtonWidget youtubeShuffleButton;
     private TextWidget youtubePlaylistStatusText;
 
     private boolean dirty;
@@ -356,6 +357,14 @@ public class DisplayBlockScreen extends Screen {
             this.addDrawableChild(youtubePrevButton);
             this.addDrawableChild(youtubeNextButton);
 
+            boolean initialShuffle = source instanceof YoutubeDisplaySource ytSrc && ytSrc.isShuffle();
+            youtubeShuffleButton = ButtonWidget.builder(
+                    Text.literal(initialShuffle ? "Shuffle: On" : "Shuffle: Off"),
+                    button -> this.onYoutubePlaylistShuffle())
+                    .dimensions(xHalf - 154, ySourceTop + 95, 75, 20)
+                    .build();
+            this.addDrawableChild(youtubeShuffleButton);
+
             youtubePlaylistStatusText = new TextWidget(this.width, 0, Text.empty(), this.textRenderer);
             youtubePlaylistStatusText.setPosition(xHalf + 4, ySourceTop + 120);
             youtubePlaylistStatusText.setTextColor(0xA0A0A0);
@@ -453,6 +462,12 @@ public class DisplayBlockScreen extends Screen {
             this.youtubeNextButton.visible = playlist;
             this.youtubeNextButton.active = playlist;
         }
+        if (this.youtubeShuffleButton != null) {
+            boolean shuffleOn = youtubeSource != null && youtubeSource.isShuffle();
+            this.youtubeShuffleButton.setMessage(Text.literal(shuffleOn ? "Shuffle: On" : "Shuffle: Off"));
+            this.youtubeShuffleButton.visible = playlist;
+            this.youtubeShuffleButton.active = playlist;
+        }
     }
 
     private void onYoutubePlaylistPrevious() {
@@ -468,6 +483,17 @@ public class DisplayBlockScreen extends Screen {
     private void onYoutubePlaylistNext() {
         DisplaySource source = this.display.getSource();
         if (source instanceof YoutubeDisplaySource youtubeSource && youtubeSource.advanceVideo()) {
+            this.display.setSource(youtubeSource);
+            DisplayNetworking.sendDisplayUpdate(this.display);
+            updateYoutubePlaylistControls(youtubeSource);
+            this.dirty = true;
+        }
+    }
+
+    private void onYoutubePlaylistShuffle() {
+        DisplaySource source = this.display.getSource();
+        if (source instanceof YoutubeDisplaySource youtubeSource) {
+            youtubeSource.setShuffle(!youtubeSource.isShuffle());
             this.display.setSource(youtubeSource);
             DisplayNetworking.sendDisplayUpdate(this.display);
             updateYoutubePlaylistControls(youtubeSource);
@@ -657,6 +683,7 @@ public class DisplayBlockScreen extends Screen {
                                 newSource.setPlaylistIndex(currentIndex);
                             }
                         }
+                        newSource.setShuffle(existingYoutubeSource.isShuffle());
                     }
                     this.display.setSource(newSource);
                 } else {

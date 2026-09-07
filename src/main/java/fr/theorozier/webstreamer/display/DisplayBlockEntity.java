@@ -332,12 +332,10 @@ public class DisplayBlockEntity extends BlockEntity {
     }
 
     /**
-     * This internal method is used to mark internal render data URL as dirty.
-     * This might be used from any side and is thread-safe.
-     * This will actually do something only on the client-side and only if the
-     * render data has been requested before.
+     * Mark internal render data URL as dirty. This will force the URI to be
+     * re-resolved on the next render tick. Thread-safe.
      */
-    private void markRenderDataSourceDirty() {
+    public void markRenderDataSourceDirty() {
         synchronized (this.cachedRenderDataGuard) {
             if (this.cachedRenderData != null) {
                 ((fr.theorozier.webstreamer.display.render.DisplayRenderData) this.cachedRenderData).markSourceDirty();

@@ -258,6 +258,14 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             this.grabberReady   = true;
             this.grabberPending = false;
 
+            // Pre-fetch the next video's playlist so it's cached when this video ends.
+            // This must run AFTER grabberReady is set so tryRestartNextVideo() can
+            // safely proceed on the render thread without blocking on HTTP.
+            if (this.display != null && this.display.getSource() instanceof YoutubeDisplaySource ytSource
+                    && ytSource.hasPlaylist()) {
+                ytSource.prepareNextVideo();
+            }
+
         } catch (Exception e) {
             WebStreamerMod.LOGGER.error(makeLog("Failed to start video stream."), e);
             this.res.freeAudioBuffer(audioBuf);
@@ -315,9 +323,17 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
     private void startSetup() {
         this.decodeThread = new Thread(() -> {
-            startGrabberAsync();
-            if (this.grabberReady && !this.destroyed) {
-                backgroundDecodeLoop();
+            FFmpegFrameGrabber localGrabber = null;
+            try {
+                startGrabberAsync();
+                localGrabber = this.grabber;
+                if (this.grabberReady && !this.destroyed) {
+                    backgroundDecodeLoop();
+                }
+            } finally {
+                if (localGrabber != null && (this.destroyed || this.decodeFinished)) {
+                    try { localGrabber.releaseUnsafe(); } catch (Exception ignored) { }
+                }
             }
         }, "WebStreamer-decode-" + Integer.toHexString(System.identityHashCode(this)));
         this.decodeThread.setDaemon(true);
@@ -384,11 +400,10 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         this.decodeThread = null;
         if (dt != null) {
             dt.interrupt();
-            try { dt.join(2000); } catch (InterruptedException ignored) { }
-        }
-        if (this.grabber != null) {
-            try { this.grabber.releaseUnsafe(); } catch (Exception ignored) { }
-            this.grabber = null;
+            // Do not join — the decode thread releases the grabber in its
+            // finally block. Joining would block the render thread for up to
+            // 500 ms per layer, causing massive freezes when 20+ layers are
+            // cleaned up simultaneously (e.g. after the 60 s orphan timeout).
         }
         if (this.tempAudioBuffer != null) {
             this.res.freeAudioBuffer(this.tempAudioBuffer);
@@ -409,7 +424,12 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         if (!youtubeSource.advanceVideo()) {
             return false;
         }
-        URI nextUri = youtubeSource.getUri();
+        // Use the pre-resolved URI from prepareNextVideo() to avoid HTTP on the render thread.
+        // Fall back to getUri() only if the pre-fetch failed or wasn't ready.
+        URI nextUri = youtubeSource.consumePreparedNextUri();
+        if (nextUri == null) {
+            nextUri = youtubeSource.getUri();
+        }
         if (nextUri == null) {
             return false;
         }
@@ -607,6 +627,11 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 }
 
                 if (this.tryRestartNextVideo()) {
+                    // Pre-fetch the next video after this one
+                    if (this.display != null && this.display.getSource() instanceof YoutubeDisplaySource ytSource
+                            && ytSource.hasPlaylist()) {
+                        ytSource.prepareNextVideo();
+                    }
                     return;
                 }
                 WebStreamerMod.LOGGER.info(makeLog("Reached end of video."));

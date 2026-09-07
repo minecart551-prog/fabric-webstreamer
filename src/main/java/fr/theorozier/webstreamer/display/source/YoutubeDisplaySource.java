@@ -12,6 +12,7 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Random;
 
 /**
  * A display source backed by a YouTube video ID and a quality label.
@@ -27,6 +28,21 @@ public class YoutubeDisplaySource extends DisplaySource {
     private String videoId;
     private List<String> videoIds;
     private int currentVideoIndex = 0;
+    private boolean shuffle = false;
+    private final Random random = new Random();
+
+    /**
+     * When shuffle is on, {@link #prepareNextVideo()} picks a random next video
+     * and pre-fetches its playlist. This field stores the picked index so that
+     * {@link #advanceVideo()} reuses it instead of picking again.
+     */
+    private int preparedNextIndex = -1;
+
+    /**
+     * The fully resolved URI for the next video, resolved on a background thread
+     * by {@link #prepareNextVideo()}. Consumed by {@link #consumePreparedNextUri()}.
+     */
+    private volatile URI preparedNextUri = null;
 
     /**
      * The original user input used to create this source. For playlist URLs, this
@@ -116,6 +132,14 @@ public class YoutubeDisplaySource extends DisplaySource {
         return this.videoIds != null && this.videoIds.size() > 1;
     }
 
+    public boolean isShuffle() {
+        return this.shuffle;
+    }
+
+    public void setShuffle(boolean shuffle) {
+        this.shuffle = shuffle;
+    }
+
     public int getPlaylistSize() {
         return this.videoIds == null ? 0 : this.videoIds.size();
     }
@@ -135,7 +159,24 @@ public class YoutubeDisplaySource extends DisplaySource {
         if (!hasPlaylist()) {
             return false;
         }
-        this.currentVideoIndex = (this.currentVideoIndex + 1) % this.videoIds.size();
+        if (this.shuffle) {
+            // Use the pre-picked index from prepareNextVideo() if available,
+            // otherwise pick randomly now (fallback).
+            if (this.preparedNextIndex >= 0) {
+                this.currentVideoIndex = this.preparedNextIndex;
+                this.preparedNextIndex = -1;
+            } else if (this.videoIds.size() == 1) {
+                this.currentVideoIndex = 0;
+            } else {
+                int newIndex;
+                do {
+                    newIndex = this.random.nextInt(this.videoIds.size());
+                } while (newIndex == this.currentVideoIndex);
+                this.currentVideoIndex = newIndex;
+            }
+        } else {
+            this.currentVideoIndex = (this.currentVideoIndex + 1) % this.videoIds.size();
+        }
         return true;
     }
 
@@ -145,6 +186,57 @@ public class YoutubeDisplaySource extends DisplaySource {
         }
         this.currentVideoIndex = (this.currentVideoIndex - 1 + this.videoIds.size()) % this.videoIds.size();
         return true;
+    }
+
+    /**
+     * Pick the next video (random if shuffle, sequential otherwise) and
+     * pre-fetch its full URI in a background thread. This must be called
+     * early (when the current video starts playing) so the URI is
+     * resolved by the time the current video ends and tryRestartNextVideo()
+     * needs it on the render thread.
+     */
+    public void prepareNextVideo() {
+        if (!hasPlaylist()) {
+            return;
+        }
+        int nextIndex;
+        if (this.shuffle) {
+            if (this.videoIds.size() == 1) {
+                nextIndex = 0;
+            } else {
+                do {
+                    nextIndex = this.random.nextInt(this.videoIds.size());
+                } while (nextIndex == this.currentVideoIndex);
+            }
+            this.preparedNextIndex = nextIndex;
+        } else {
+            nextIndex = (this.currentVideoIndex + 1) % this.videoIds.size();
+        }
+        String nextId = this.videoIds.get(nextIndex);
+        WebStreamerMod.LOGGER.info("Pre-fetching URI for next video: {} (index {})", nextId, nextIndex);
+        Thread prefetch = new Thread(() -> {
+            try {
+                Playlist playlist = WebStreamerClientMod.YOUTUBE_CLIENT.requestPlaylist(nextId);
+                PlaylistQuality q = playlist.getQuality(this.quality);
+                if (q != null) {
+                    this.preparedNextUri = q.uri();
+                }
+            } catch (Exception e) {
+                WebStreamerMod.LOGGER.warn("Pre-fetch failed for '{}': {}", nextId, e.getMessage());
+            }
+        }, "yt-prefetch-" + nextId);
+        prefetch.setDaemon(true);
+        prefetch.start();
+    }
+
+    /**
+     * Consume the pre-resolved URI for the next video. Returns and clears it.
+     * Returns null if no URI was pre-resolved or if it expired.
+     */
+    public URI consumePreparedNextUri() {
+        URI uri = this.preparedNextUri;
+        this.preparedNextUri = null;
+        return uri;
     }
 
     // -------------------------------------------------------------------------
@@ -225,6 +317,7 @@ public class YoutubeDisplaySource extends DisplaySource {
             nbt.putString("quality", this.quality);
         }
         nbt.putInt("videoIndex", this.currentVideoIndex);
+        nbt.putBoolean("shuffle", this.shuffle);
     }
 
     @Override
@@ -263,5 +356,6 @@ public class YoutubeDisplaySource extends DisplaySource {
         if (nbt.contains("videoIndex")) {
             this.currentVideoIndex = nbt.getInt("videoIndex");
         }
+        this.shuffle = nbt.getBoolean("shuffle");
     }
 }
