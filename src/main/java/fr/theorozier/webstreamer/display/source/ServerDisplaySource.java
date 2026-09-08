@@ -39,6 +39,7 @@ public class ServerDisplaySource extends DisplaySource {
     private List<String> videoIds;
     private int currentVideoIndex = 0;
     private boolean shuffle = false;
+    private boolean randomStartFrame = false;
     private final Random random = new Random();
 
     /**
@@ -82,6 +83,14 @@ public class ServerDisplaySource extends DisplaySource {
 
     public void setShuffle(boolean shuffle) {
         this.shuffle = shuffle;
+    }
+
+    public boolean isRandomStartFrame() {
+        return this.randomStartFrame;
+    }
+
+    public void setRandomStartFrame(boolean randomStartFrame) {
+        this.randomStartFrame = randomStartFrame;
     }
 
     public int getPlaylistSize() {
@@ -306,6 +315,7 @@ public class ServerDisplaySource extends DisplaySource {
         }
         nbt.putInt("serverVideoIndex", this.currentVideoIndex);
         nbt.putBoolean("serverShuffle", this.shuffle);
+        nbt.putBoolean("serverRandomStartFrame", this.randomStartFrame);
     }
 
     @Override
@@ -317,6 +327,7 @@ public class ServerDisplaySource extends DisplaySource {
             this.currentVideoIndex = nbt.getInt("serverVideoIndex");
         }
         this.shuffle = nbt.getBoolean("serverShuffle");
+        this.randomStartFrame = nbt.getBoolean("serverRandomStartFrame");
     }
 
     // -------------------------------------------------------------------------

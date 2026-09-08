@@ -81,7 +81,15 @@ public class DisplayLayerManager extends DisplayLayerMap<DisplayLayerNode.Key> {
             if (path.endsWith(".m3u8")) {
                 return new DisplayLayerHls(key.uri(), this.res);
             } else if (path.endsWith(".gif")) {
-                return new DisplayLayerGif(key.uri(), this.res);
+                boolean randomStart = false;
+                if (key.display() != null) {
+                    if (key.display().getSource() instanceof fr.theorozier.webstreamer.display.source.RawDisplaySource rawSrc) {
+                        randomStart = rawSrc.isRandomStartFrame();
+                    } else if (key.display().getSource() instanceof fr.theorozier.webstreamer.display.source.ServerDisplaySource srvSrc) {
+                        randomStart = srvSrc.isRandomStartFrame();
+                    }
+                }
+                return new DisplayLayerGif(key.uri(), this.res, randomStart);
             } else if (path.endsWith(".jpeg") || path.endsWith(".jpg") || path.endsWith(".bmp") || path.endsWith(".png")) {
                 return new DisplayLayerImage(key.uri(), this.res);
             } else if (path.endsWith(".svg")) {

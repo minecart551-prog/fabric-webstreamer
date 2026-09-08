@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit;
 public class DisplayLayerGif extends DisplayLayerSimple {
 
     private static final int MAX_FAILED_GRABS = 5;
-    private static final int FRAME_BUFFER_POOL_SIZE = 4;
+    private static final int FRAME_BUFFER_POOL_SIZE = 8;
     private static final int FRAME_BUFFER_SIZE = 512 * 1024;
     private static final String USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
@@ -50,6 +50,7 @@ public class DisplayLayerGif extends DisplayLayerSimple {
     private final LinkedBlockingQueue<ByteBuffer> bufferPool = new LinkedBlockingQueue<>();
     private Thread decodeThread;
     private volatile boolean decodeFinished = false;
+    private final boolean randomStartFrame;
 
     private static class PooledGifFrame {
         final ByteBuffer data;
@@ -67,8 +68,9 @@ public class DisplayLayerGif extends DisplayLayerSimple {
         }
     }
 
-    public DisplayLayerGif(URI uri, DisplayLayerResources res) {
+    public DisplayLayerGif(URI uri, DisplayLayerResources res, boolean randomStartFrame) {
         super(uri, res);
+        this.randomStartFrame = randomStartFrame;
     }
 
     @Override
@@ -139,7 +141,25 @@ public class DisplayLayerGif extends DisplayLayerSimple {
 
             this.grabber = fg;
             this.tempFile = tmp;
-            this.playbackMicros = 0;
+
+            // Random start frame: seek to a random position in the GIF.
+            if (this.randomStartFrame) {
+                long durationUs = fg.getLengthInTime();
+                if (durationUs > 0) {
+                    long randomUs = (long) (Math.random() * durationUs);
+                    try {
+                        fg.setTimestamp(randomUs);
+                        this.playbackMicros = randomUs;
+                    } catch (Exception e) {
+                        WebStreamerMod.LOGGER.warn(makeLog("Failed to seek to random frame, starting from 0: {}"), e.getMessage());
+                        this.playbackMicros = 0;
+                    }
+                } else {
+                    this.playbackMicros = 0;
+                }
+            } else {
+                this.playbackMicros = 0;
+            }
             this.lastTickNanos = System.nanoTime();
 
             for (int i = 0; i < FRAME_BUFFER_POOL_SIZE; i++) {
@@ -175,6 +195,9 @@ public class DisplayLayerGif extends DisplayLayerSimple {
                     int srcPos = src.position();
                     int needed = src.remaining();
                     if (buf.capacity() < needed) {
+                        // Return the pooled buffer before allocating a larger one
+                        // to prevent the pool from being drained by oversized frames.
+                        this.bufferPool.add(buf);
                         buf = ByteBuffer.allocateDirect(needed);
                     }
                     buf.clear();
@@ -202,6 +225,11 @@ public class DisplayLayerGif extends DisplayLayerSimple {
         this.pendingFrames.clear();
         if (this.grabber != null) {
             try {
+                this.grabber.setTimestamp(0);
+                return;
+            } catch (Exception ignored) { }
+            // Fallback: if seek fails, recreate the grabber.
+            try {
                 this.grabber.releaseUnsafe();
             } catch (Exception ignored) { }
             try {
@@ -223,7 +251,10 @@ public class DisplayLayerGif extends DisplayLayerSimple {
         this.decodeThread = null;
         if (dt != null) {
             dt.interrupt();
-            try { dt.join(2000); } catch (InterruptedException ignored) { }
+            // Do not join — the decode thread releases the grabber in its
+            // finally block. Joining would block the render thread for up to
+            // 2 seconds per layer, causing massive freezes when many layers
+            // are cleaned up simultaneously (e.g. after the 60 s orphan timeout).
         }
         if (this.grabber != null) {
             try { this.grabber.releaseUnsafe(); } catch (Exception ignored) { }
@@ -280,6 +311,13 @@ public class DisplayLayerGif extends DisplayLayerSimple {
             while ((frame = this.pendingFrames.peek()) != null) {
                 if (frame.timestamp <= this.playbackMicros) {
                     this.pendingFrames.poll();
+                    // Skip to the latest ready frame if multiple are queued,
+                    // discarding stale ones to stay in sync with wall-clock time.
+                    PooledGifFrame next;
+                    while ((next = this.pendingFrames.peek()) != null && next.timestamp <= this.playbackMicros) {
+                        this.bufferPool.add(frame.data);
+                        frame = this.pendingFrames.poll();
+                    }
                     this.tex.uploadRaw(frame.data, GL11.GL_RGB8, frame.width, frame.height, frame.stride / 3, GL12.GL_BGR, 4);
                     this.bufferPool.add(frame.data);
                     this.failedGrabs = 0;

@@ -321,7 +321,15 @@ public class DisplayBlockScreen extends Screen {
             rawUriField.setChangedListener(val -> this.dirty = true);
             this.addDrawableChild(rawUriField);
 
-            ySourceBottom += 10 + 40;
+            boolean initialRawRandomStart = source instanceof RawDisplaySource rawSrc && rawSrc.isRandomStartFrame();
+            ButtonWidget rawRandomStartButton = ButtonWidget.builder(
+                    Text.literal(initialRawRandomStart ? "Random Start: On" : "Random Start: Off"),
+                    button -> this.onRawRandomStartFrame())
+                    .dimensions(xHalf - 154, ySourceTop + 36, 150, 20)
+                    .build();
+            this.addDrawableChild(rawRandomStartButton);
+
+            ySourceBottom += 10 + 40 + 24;
 
         } else if (sourceType == SourceType.TWITCH) {
 
@@ -487,6 +495,14 @@ public class DisplayBlockScreen extends Screen {
                     .dimensions(xHalf - 154, ySourceTop + 55, 75, 20)
                     .build();
             this.addDrawableChild(serverShuffleButton);
+
+            boolean initialServerRandomStart = source instanceof ServerDisplaySource srvSrc2 && srvSrc2.isRandomStartFrame();
+            ButtonWidget serverRandomStartButton = ButtonWidget.builder(
+                    Text.literal(initialServerRandomStart ? "Random Start: On" : "Random Start: Off"),
+                    button -> this.onServerRandomStartFrame())
+                    .dimensions(xHalf + 4, ySourceTop + 55, 154, 20)
+                    .build();
+            this.addDrawableChild(serverRandomStartButton);
 
             serverPlaylistStatusText = new TextWidget(this.width, 0, Text.empty(), this.textRenderer);
             serverPlaylistStatusText.setPosition(xHalf - 154, ySourceTop + 80);
@@ -680,6 +696,33 @@ public class DisplayBlockScreen extends Screen {
             DisplayNetworking.sendDisplayUpdate(this.display);
             updateServerPlaylistControls(serverSource);
             this.dirty = true;
+        }
+    }
+
+    private void onRawRandomStartFrame() {
+        DisplaySource source = this.display.getSource();
+        if (source instanceof RawDisplaySource rawSource) {
+            rawSource.setRandomStartFrame(!rawSource.isRandomStartFrame());
+            this.display.setSource(rawSource);
+            DisplayNetworking.sendDisplayUpdate(this.display);
+            this.dirty = true;
+            // Re-init to update button text
+            if (this.client != null) {
+                this.init(this.client, this.width, this.height);
+            }
+        }
+    }
+
+    private void onServerRandomStartFrame() {
+        DisplaySource source = this.display.getSource();
+        if (source instanceof ServerDisplaySource serverSource) {
+            serverSource.setRandomStartFrame(!serverSource.isRandomStartFrame());
+            this.display.setSource(serverSource);
+            DisplayNetworking.sendDisplayUpdate(this.display);
+            this.dirty = true;
+            if (this.client != null) {
+                this.init(this.client, this.width, this.height);
+            }
         }
     }
 

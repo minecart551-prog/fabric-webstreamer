@@ -26,6 +26,9 @@ public class RawDisplaySource extends DisplaySource {
     /** Cached resolved stream URI for YouTube watch URLs. */
     private URI resolvedUri;
 
+    /** When true, GIF sources start playback from a random frame. */
+    private boolean randomStartFrame;
+
     public RawDisplaySource() { }
 
     public RawDisplaySource(URI uri) {
@@ -40,6 +43,14 @@ public class RawDisplaySource extends DisplaySource {
     public void setUri(URI uri) {
         this.uri = uri;
         this.resolvedUri = null;
+    }
+
+    public boolean isRandomStartFrame() {
+        return this.randomStartFrame;
+    }
+
+    public void setRandomStartFrame(boolean randomStartFrame) {
+        this.randomStartFrame = randomStartFrame;
     }
 
     @Override
@@ -89,6 +100,7 @@ public class RawDisplaySource extends DisplaySource {
         if (this.uri != null) {
             nbt.putString("url", this.uri.toString());
         }
+        nbt.putBoolean("randomStartFrame", this.randomStartFrame);
     }
 
     @Override
@@ -100,6 +112,7 @@ public class RawDisplaySource extends DisplaySource {
                 e.printStackTrace();
             }
         }
+        this.randomStartFrame = nbt.getBoolean("randomStartFrame");
     }
 
     private static boolean isYouTubeUrl(String url) {
