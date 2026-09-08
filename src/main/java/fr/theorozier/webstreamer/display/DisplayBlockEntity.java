@@ -69,6 +69,9 @@ public class DisplayBlockEntity extends BlockEntity {
     private double offsetX = 0.0;
     private double offsetY = 0.0;
     private double offsetZ = 0.0;
+    private float rotationX = 0f;
+    private float rotationY = 0f;
+    private float rotationZ = 0f;
     private boolean requiresOp = false;
     private boolean playbackPaused = false;
 
@@ -161,6 +164,25 @@ public class DisplayBlockEntity extends BlockEntity {
         return offsetZ;
     }
 
+    public void setRotation(float rotationX, float rotationY, float rotationZ) {
+        this.rotationX = rotationX;
+        this.rotationY = rotationY;
+        this.rotationZ = rotationZ;
+        this.markDirty();
+    }
+
+    public float getRotationX() {
+        return rotationX;
+    }
+
+    public float getRotationY() {
+        return rotationY;
+    }
+
+    public float getRotationZ() {
+        return rotationZ;
+    }
+
     public boolean requiresOp() {
         return requiresOp;
     }
@@ -195,6 +217,9 @@ public class DisplayBlockEntity extends BlockEntity {
         displayNbt.putDouble("offsetZ", this.offsetZ);
         displayNbt.putBoolean("requiresOp", this.requiresOp);
         displayNbt.putBoolean("playbackPaused", this.playbackPaused);
+        displayNbt.putFloat("rotationX", this.rotationX);
+        displayNbt.putFloat("rotationY", this.rotationY);
+        displayNbt.putFloat("rotationZ", this.rotationZ);
 
         if (this.source != null) {
             displayNbt.putString("type", this.source.getType());
@@ -264,6 +289,24 @@ public class DisplayBlockEntity extends BlockEntity {
                 this.playbackPaused = playbackPaused.byteValue() != 0;
             } else {
                 this.playbackPaused = false;
+            }
+
+            if (displayNbt.get("rotationX") instanceof NbtFloat rx) {
+                this.rotationX = rx.floatValue();
+            } else {
+                this.rotationX = 0f;
+            }
+
+            if (displayNbt.get("rotationY") instanceof NbtFloat ry) {
+                this.rotationY = ry.floatValue();
+            } else {
+                this.rotationY = 0f;
+            }
+
+            if (displayNbt.get("rotationZ") instanceof NbtFloat rz) {
+                this.rotationZ = rz.floatValue();
+            } else {
+                this.rotationZ = 0f;
             }
 
             if (displayNbt.get("type") instanceof NbtString type) {

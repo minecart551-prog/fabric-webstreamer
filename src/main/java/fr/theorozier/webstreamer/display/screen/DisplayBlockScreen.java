@@ -45,6 +45,9 @@ public class DisplayBlockScreen extends Screen {
     private static final Text OFFSET_X_TEXT = Text.translatable("gui.webstreamer.display.offsetX");
     private static final Text OFFSET_Y_TEXT = Text.translatable("gui.webstreamer.display.offsetY");
     private static final Text OFFSET_Z_TEXT = Text.translatable("gui.webstreamer.display.offsetZ");
+    private static final Text ROTATION_X_TEXT = Text.translatable("gui.webstreamer.display.rotationX");
+    private static final Text ROTATION_Y_TEXT = Text.translatable("gui.webstreamer.display.rotationY");
+    private static final Text ROTATION_Z_TEXT = Text.translatable("gui.webstreamer.display.rotationZ");
     private static final Text SOURCE_TYPE_TEXT = Text.translatable("gui.webstreamer.display.sourceType");
     private static final Text SOURCE_TYPE_RAW_TEXT = Text.translatable("gui.webstreamer.display.sourceType.raw");
     private static final Text SOURCE_TYPE_TWITCH_TEXT = Text.translatable("gui.webstreamer.display.sourceType.twitch");
@@ -89,6 +92,7 @@ public class DisplayBlockScreen extends Screen {
     private final boolean fixedScaleOffset;
 
     private TextFieldWidget widthField, heightField, offsetXField, offsetYField, offsetZField;
+    private RotationSliderWidget rotationXSlider, rotationYSlider, rotationZSlider;
     private AudioDistanceSliderWidget audioDistanceSlider;
     private AudioVolumeSliderWidget audioVolumeSlider;
     private ButtonWidget sourceTypeButton;
@@ -215,9 +219,49 @@ public class DisplayBlockScreen extends Screen {
         offsetZField.setText(offsetZVal);
         offsetZField.setEditable(!this.fixedScaleOffset);
         offsetZField.setChangedListener(val -> this.dirty = true);
-        this.addDrawableChild(offsetZField);
+            this.addDrawableChild(offsetZField);
 
-        DisplaySource source = this.display.getSource();
+            // Rotation section — only for WebDisplay and WebDisplayP (not TV/BigTV)
+            int rotationRowHeight = 0;
+            if (!this.fixedScaleOffset) {
+                rotationRowHeight = 30;
+
+                TextWidget rotXText = new TextWidget(ROTATION_X_TEXT, this.textRenderer);
+                rotXText.setPosition(xHalf - 154, yTop + 31);
+                rotXText.setTextColor(0xA0A0A0);
+                rotXText.alignLeft();
+                this.addDrawableChild(rotXText);
+
+                TextWidget rotYText = new TextWidget(ROTATION_Y_TEXT, this.textRenderer);
+                rotYText.setPosition(xHalf - 38, yTop + 31);
+                rotYText.setTextColor(0xA0A0A0);
+                rotYText.alignLeft();
+                this.addDrawableChild(rotYText);
+
+                TextWidget rotZText = new TextWidget(ROTATION_Z_TEXT, this.textRenderer);
+                rotZText.setPosition(xHalf + 78, yTop + 31);
+                rotZText.setTextColor(0xA0A0A0);
+                rotZText.alignLeft();
+                this.addDrawableChild(rotZText);
+
+                float rotXVal = rotationXSlider == null ? this.display.getRotationX() : rotationXSlider.getRotation();
+                float rotYVal = rotationYSlider == null ? this.display.getRotationY() : rotationYSlider.getRotation();
+                float rotZVal = rotationZSlider == null ? this.display.getRotationZ() : rotationZSlider.getRotation();
+
+                rotationXSlider = new RotationSliderWidget(xHalf - 154, yTop + 41, 100, 20, rotXVal);
+                rotationXSlider.setChangedListener(val -> this.dirty = true);
+                this.addDrawableChild(rotationXSlider);
+
+                rotationYSlider = new RotationSliderWidget(xHalf - 38, yTop + 41, 100, 20, rotYVal);
+                rotationYSlider.setChangedListener(val -> this.dirty = true);
+                this.addDrawableChild(rotationYSlider);
+
+                rotationZSlider = new RotationSliderWidget(xHalf + 78, yTop + 41, 100, 20, rotZVal);
+                rotationZSlider.setChangedListener(val -> this.dirty = true);
+                this.addDrawableChild(rotationZSlider);
+            }
+
+            DisplaySource source = this.display.getSource();
         if (this.sourceType == null) {
             this.sourceType = SourceType.YOUTUBE;
             if (source instanceof TwitchDisplaySource) {
@@ -242,16 +286,17 @@ public class DisplayBlockScreen extends Screen {
         float audioDistanceVal = audioDistanceSlider == null ? this.display.getAudioDistance() : audioDistanceSlider.getDistance();
         boolean isBaseDisplay = this.display.getCachedState().getBlock() instanceof DisplayBlock && !(this.display.getCachedState().getBlock() instanceof WebDisplayPBlock)&& !(this.display.getCachedState().getBlock() instanceof TVBlock)&& !(this.display.getCachedState().getBlock() instanceof BigTVBlock);
         float maxAudioDistance = isBaseDisplay ? 512f : 64f;
-        audioDistanceSlider = new AudioDistanceSliderWidget(xHalf - 154, yTop + 36, 150, 20, audioDistanceVal, maxAudioDistance);
+        int audioRowY = yTop + 36 + rotationRowHeight;
+        audioDistanceSlider = new AudioDistanceSliderWidget(xHalf - 154, audioRowY, 150, 20, audioDistanceVal, maxAudioDistance);
         audioDistanceSlider.setChangedListener(val -> this.dirty = true);
         this.addDrawableChild(audioDistanceSlider);
 
         float audioVolumeVal = audioVolumeSlider == null ? this.display.getAudioVolume() : audioVolumeSlider.getVolume();
-        audioVolumeSlider = new AudioVolumeSliderWidget(xHalf + 4, yTop + 36, 150, 20, audioVolumeVal);
+        audioVolumeSlider = new AudioVolumeSliderWidget(xHalf + 4, audioRowY, 150, 20, audioVolumeVal);
         audioVolumeSlider.setChangedListener(val -> this.dirty = true);
         this.addDrawableChild(audioVolumeSlider);
 
-        int ySourceTop = yTop + 70;
+        int ySourceTop = yTop + 60 + rotationRowHeight;
         int ySourceBottom = ySourceTop;
 
         if (sourceType == SourceType.RAW) {
@@ -784,6 +829,11 @@ public class DisplayBlockScreen extends Screen {
             audioDistance = Math.min(audioDistance, isBaseDisplay ? 512f : 64f);
             this.display.setAudioConfig(audioDistance, audioVolume);
 
+            float rotX = this.fixedScaleOffset ? 0f : this.rotationXSlider.getRotation();
+            float rotY = this.fixedScaleOffset ? 0f : this.rotationYSlider.getRotation();
+            float rotZ = this.fixedScaleOffset ? 0f : this.rotationZSlider.getRotation();
+            this.display.setRotation(rotX, rotY, rotZ);
+
             if (sourceType == SourceType.RAW) {
                 this.display.setSource(new RawDisplaySource(rawUri));
             } else if (sourceType == SourceType.TWITCH) {
@@ -1173,6 +1223,39 @@ public class DisplayBlockScreen extends Screen {
         @Override
         protected void applyValue() {
             this.changedListener.accept((float) this.value);
+        }
+
+    }
+
+    /**
+     * Custom slider widget for rotation in degrees (-180 to +180).
+     */
+    private static class RotationSliderWidget extends SliderWidget {
+
+        private Consumer<Float> changedListener;
+
+        public RotationSliderWidget(int x, int y, int width, int height, float degrees) {
+            super(x, y, width, height, Text.empty(), (degrees + 180f) / 360f);
+            this.updateMessage();
+        }
+
+        public void setChangedListener(Consumer<Float> changedListener) {
+            this.changedListener = changedListener;
+        }
+
+        public float getRotation() {
+            return (float) (this.value * 360.0 - 180.0);
+        }
+
+        @Override
+        protected void updateMessage() {
+            int deg = (int) Math.round(this.getRotation());
+            this.setMessage(Text.literal(deg + "\u00b0"));
+        }
+
+        @Override
+        protected void applyValue() {
+            this.changedListener.accept(this.getRotation());
         }
 
     }

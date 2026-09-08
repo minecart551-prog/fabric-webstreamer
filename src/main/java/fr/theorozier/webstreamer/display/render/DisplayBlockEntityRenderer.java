@@ -197,6 +197,25 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
             }
         }
 
+        // Apply user-defined rotation
+        float userRotX = entity.getRotationX();
+        float userRotY = entity.getRotationY();
+        float userRotZ = entity.getRotationZ();
+        if (userRotX != 0f || userRotY != 0f || userRotZ != 0f) {
+            double radX = Math.toRadians(userRotX);
+            double radY = Math.toRadians(userRotY);
+            double radZ = Math.toRadians(userRotZ);
+            if (userRotX != 0f) {
+                matrices.multiply(new Quaternionf(new AxisAngle4d(radX, 1.0, 0.0, 0.0)));
+            }
+            if (userRotY != 0f) {
+                matrices.multiply(new Quaternionf(new AxisAngle4d(radY, 0.0, 1.0, 0.0)));
+            }
+            if (userRotZ != 0f) {
+                matrices.multiply(new Quaternionf(new AxisAngle4d(radZ, 0.0, 0.0, 1.0)));
+            }
+        }
+
         if (uri != null) {
             try {
                 BlockPos pos = entity.getPos();
