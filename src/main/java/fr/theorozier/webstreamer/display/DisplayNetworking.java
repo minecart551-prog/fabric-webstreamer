@@ -1,5 +1,7 @@
 package fr.theorozier.webstreamer.display;
 
+import fr.theorozier.webstreamer.WebStreamerMod;
+import fr.theorozier.webstreamer.server.ServerSourceRegistry;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -8,6 +10,7 @@ import net.fabricmc.fabric.api.networking.v1.PacketSender;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.block.Block;
 import net.minecraft.nbt.NbtCompound;
+import net.minecraft.nbt.NbtString;
 import net.minecraft.network.PacketByteBuf;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.server.MinecraftServer;
@@ -18,6 +21,7 @@ import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -34,9 +38,13 @@ public class DisplayNetworking {
 	
 	public static final Identifier DISPLAY_BLOCK_UPDATE_PACKET_ID = new Identifier("webstreamer:display_block_update");
 	public static final Identifier DISPLAY_PLAYBACK_STATE_PACKET_ID = new Identifier("webstreamer:display_playback_state");
+	public static final Identifier SERVER_SOURCES_BROADCAST_PACKET_ID = new Identifier("webstreamer:server_sources_broadcast");
 
 	private static final Map<PlaybackKey, Set<UUID>> PLAYBACK_VIEWERS = new HashMap<>();
 	private static final Map<PlaybackKey, Boolean> CLIENT_PLAYBACK_RANGE = new HashMap<>();
+
+	/** Client-side cache of server sources (name → URL), populated by server broadcasts. */
+	private static volatile Map<String, String> clientSourceCache = Map.of();
 
 	private static PacketByteBuf encodeDisplayUpdatePacket(DisplayBlockEntity blockEntity) {
 		PacketByteBuf buf = PacketByteBufs.create();
@@ -71,6 +79,75 @@ public class DisplayNetworking {
         buf.writeBlockPos(blockEntity.getPos());
         buf.writeBoolean(inRange);
         ClientPlayNetworking.send(DISPLAY_PLAYBACK_STATE_PACKET_ID, buf);
+    }
+
+    // -------------------------------------------------------------------------
+    // Server sources cache (client-side, populated by server broadcasts)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Client-side only, resolve a server source name from the local cache.
+     * The cache is populated by {@link #SERVER_SOURCES_BROADCAST_PACKET_ID} packets
+     * sent by the server when sources.txt is loaded or reloaded.
+     *
+     * @return The resolved URI string, or {@code null} if not found.
+     */
+    @Environment(EnvType.CLIENT)
+    public static String resolveServerSource(String name) {
+        return clientSourceCache.get(name);
+    }
+
+    /**
+     * Client-side only, register the receiver for server sources broadcast packets.
+     * Called once from {@link fr.theorozier.webstreamer.WebStreamerClientMod#onInitializeClient()}.
+     */
+    @Environment(EnvType.CLIENT)
+    public static void registerSourcesBroadcastReceiver() {
+        ClientPlayNetworking.registerGlobalReceiver(SERVER_SOURCES_BROADCAST_PACKET_ID, (client, handler2, buf, responseSender) -> {
+            int count = buf.readVarInt();
+            HashMap<String, String> map = new HashMap<>(count);
+            for (int i = 0; i < count; i++) {
+                map.put(buf.readString(), buf.readString());
+            }
+            client.executeSync(() -> {
+                clientSourceCache = Collections.unmodifiableMap(map);
+                WebStreamerMod.LOGGER.info("[Client] Received server sources broadcast: {} source(s)", map.size());
+            });
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // Server-side broadcast methods
+    // -------------------------------------------------------------------------
+
+    /**
+     * Server-side only, send the full sources map to a single player.
+     */
+    public static void sendSourcesBroadcast(ServerPlayerEntity player) {
+        Map<String, String> sources = ServerSourceRegistry.getAll();
+        PacketByteBuf buf = PacketByteBufs.create();
+        buf.writeVarInt(sources.size());
+        for (Map.Entry<String, String> entry : sources.entrySet()) {
+            buf.writeString(entry.getKey());
+            buf.writeString(entry.getValue());
+        }
+        ServerPlayNetworking.send(player, SERVER_SOURCES_BROADCAST_PACKET_ID, buf);
+    }
+
+    /**
+     * Server-side only, broadcast the full sources map to all connected players.
+     */
+    public static void broadcastSourcesToAll(MinecraftServer server) {
+        Map<String, String> sources = ServerSourceRegistry.getAll();
+        PacketByteBuf buf = PacketByteBufs.create();
+        buf.writeVarInt(sources.size());
+        for (Map.Entry<String, String> entry : sources.entrySet()) {
+            buf.writeString(entry.getKey());
+            buf.writeString(entry.getValue());
+        }
+        for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+            ServerPlayNetworking.send(player, SERVER_SOURCES_BROADCAST_PACKET_ID, buf);
+        }
     }
     
     /**

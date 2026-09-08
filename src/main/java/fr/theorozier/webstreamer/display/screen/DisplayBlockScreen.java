@@ -11,6 +11,7 @@ import fr.theorozier.webstreamer.display.TVBlockEntity;
 import fr.theorozier.webstreamer.display.WebDisplayPBlock;
 import fr.theorozier.webstreamer.display.source.DisplaySource;
 import fr.theorozier.webstreamer.display.source.RawDisplaySource;
+import fr.theorozier.webstreamer.display.source.ServerDisplaySource;
 import fr.theorozier.webstreamer.display.source.TwitchDisplaySource;
 import fr.theorozier.webstreamer.display.source.YoutubeDisplaySource;
 import fr.theorozier.webstreamer.playlist.Playlist;
@@ -48,6 +49,8 @@ public class DisplayBlockScreen extends Screen {
     private static final Text SOURCE_TYPE_RAW_TEXT = Text.translatable("gui.webstreamer.display.sourceType.raw");
     private static final Text SOURCE_TYPE_TWITCH_TEXT = Text.translatable("gui.webstreamer.display.sourceType.twitch");
     private static final Text SOURCE_TYPE_YOUTUBE_TEXT = Text.translatable("gui.webstreamer.display.sourceType.youtube");
+    private static final Text SOURCE_TYPE_SERVER_TEXT = Text.translatable("gui.webstreamer.display.sourceType.server");
+    private static final Text SERVER_SOURCE_NAME_TEXT = Text.translatable("gui.webstreamer.display.serverSourceName");
     private static final Text URL_TEXT = Text.translatable("gui.webstreamer.display.url");
     private static final Text CHANNEL_TEXT = Text.translatable("gui.webstreamer.display.channel");
     private static final Text VIDEO_ID_TEXT = Text.literal("YouTube URL / Playlist URL");
@@ -67,6 +70,7 @@ public class DisplayBlockScreen extends Screen {
     private static final Text ERR_YOUTUBE_NOT_FOUND_TEXT = Text.translatable("gui.webstreamer.display.error.youtubeNotFound");
     private static final Text ERR_YOUTUBE_UNAVAILABLE_TEXT = Text.translatable("gui.webstreamer.display.error.youtubeUnavailable");
     private static final Text ERR_YOUTUBE_NO_STREAMS_TEXT = Text.translatable("gui.webstreamer.display.error.youtubeNoStreams");
+    private static final Text ERR_SERVER_NOT_FOUND_TEXT = Text.translatable("gui.webstreamer.display.error.serverNotFound");
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final AsyncProcessor<String, Playlist, YoutubeClient.YoutubeException> asyncYoutubePlaylist = new AsyncProcessor<>(WebStreamerClientMod.YOUTUBE_CLIENT::requestPlaylist, false);
@@ -108,6 +112,13 @@ public class DisplayBlockScreen extends Screen {
     private ButtonWidget youtubeNextButton;
     private ButtonWidget youtubeShuffleButton;
     private TextWidget youtubePlaylistStatusText;
+
+    private TextFieldWidget serverSourceNameField;
+    private TextWidget serverStatusText;
+    private ButtonWidget serverPrevButton;
+    private ButtonWidget serverNextButton;
+    private ButtonWidget serverShuffleButton;
+    private TextWidget serverPlaylistStatusText;
 
     private boolean dirty;
     private boolean commitOnClose = true;
@@ -213,6 +224,8 @@ public class DisplayBlockScreen extends Screen {
                 this.sourceType = SourceType.TWITCH;
             } else if (source instanceof RawDisplaySource rawSource && rawSource.getUri() != null) {
                 this.sourceType = SourceType.RAW;
+            } else if (source instanceof ServerDisplaySource) {
+                this.sourceType = SourceType.SERVER;
             }
         }
 
@@ -375,6 +388,72 @@ public class DisplayBlockScreen extends Screen {
             updateYoutubePlaylistControls(source instanceof YoutubeDisplaySource youtubeSource ? youtubeSource : null);
             ySourceBottom += 95 + 40;
 
+        } else if (sourceType == SourceType.SERVER) {
+
+            TextWidget serverNameLabel = new TextWidget(SERVER_SOURCE_NAME_TEXT, this.textRenderer);
+            serverNameLabel.setPosition(xHalf - 154, ySourceTop);
+            serverNameLabel.setTextColor(0xA0A0A0);
+            serverNameLabel.alignLeft();
+            this.addDrawableChild(serverNameLabel);
+
+            String serverNameVal = "";
+            if (serverSourceNameField != null) {
+                serverNameVal = serverSourceNameField.getText();
+            } else if (source instanceof ServerDisplaySource serverSource) {
+                serverNameVal = serverSource.getSourceName();
+            }
+            serverSourceNameField = new TextFieldWidget(this.textRenderer, xHalf - 154, ySourceTop + 10, 308, 20, Text.empty());
+            serverSourceNameField.setMaxLength(128);
+            serverSourceNameField.setText(serverNameVal);
+            serverSourceNameField.setChangedListener(val -> this.dirty = true);
+            this.addDrawableChild(serverSourceNameField);
+
+            serverStatusText = new TextWidget(this.width, 0, Text.empty(), this.textRenderer);
+            serverStatusText.setPosition(xHalf - 154, ySourceTop + 36);
+            serverStatusText.setTextColor(0xA0A0A0);
+            serverStatusText.alignLeft();
+            // Show current resolved status
+            if (!serverNameVal.isEmpty()) {
+                String resolved = DisplayNetworking.resolveServerSource(serverNameVal);
+                if (resolved != null) {
+                    serverStatusText.setMessage(Text.literal("Resolved: " + resolved));
+                    serverStatusText.setTextColor(0x55FF55);
+                } else {
+                    serverStatusText.setMessage(Text.literal("Not yet resolved (will resolve at render time)"));
+                    serverStatusText.setTextColor(0xA0A0A0);
+                }
+            }
+            this.addDrawableChild(serverStatusText);
+
+            // Playlist controls — same layout as the YouTube tab
+            serverPrevButton = ButtonWidget.builder(Text.literal("Prev"), button -> this.onServerPlaylistPrevious())
+                    .dimensions(xHalf + 4, ySourceTop + 55, 75, 20)
+                    .build();
+            serverNextButton = ButtonWidget.builder(Text.literal("Next"), button -> this.onServerPlaylistNext())
+                    .dimensions(xHalf + 83, ySourceTop + 55, 75, 20)
+                    .build();
+            this.addDrawableChild(serverPrevButton);
+            this.addDrawableChild(serverNextButton);
+
+            boolean initialServerShuffle = source instanceof ServerDisplaySource srvSrc && srvSrc.isShuffle();
+            serverShuffleButton = ButtonWidget.builder(
+                    Text.literal(initialServerShuffle ? "Shuffle: On" : "Shuffle: Off"),
+                    button -> this.onServerPlaylistShuffle())
+                    .dimensions(xHalf - 154, ySourceTop + 55, 75, 20)
+                    .build();
+            this.addDrawableChild(serverShuffleButton);
+
+            serverPlaylistStatusText = new TextWidget(this.width, 0, Text.empty(), this.textRenderer);
+            serverPlaylistStatusText.setPosition(xHalf - 154, ySourceTop + 80);
+            serverPlaylistStatusText.setTextColor(0xA0A0A0);
+            serverPlaylistStatusText.alignLeft();
+            serverPlaylistStatusText.visible = false;
+            this.addDrawableChild(serverPlaylistStatusText);
+
+            updateServerPlaylistControls(source instanceof ServerDisplaySource srvSrc ? srvSrc : null);
+
+            ySourceBottom += 80 + 20;
+
         }
 
         errorText = new TextWidget(this.width, 0, Text.empty(), this.textRenderer);
@@ -501,6 +580,64 @@ public class DisplayBlockScreen extends Screen {
         }
     }
 
+    private void updateServerPlaylistControls(ServerDisplaySource serverSource) {
+        boolean playlist = serverSource != null && serverSource.hasPlaylist();
+        if (this.serverPlaylistStatusText != null) {
+            if (playlist) {
+                this.serverPlaylistStatusText.setMessage(Text.literal(
+                        String.format("Playlist %d/%d", serverSource.getPlaylistIndex() + 1, serverSource.getPlaylistSize())));
+            } else {
+                this.serverPlaylistStatusText.setMessage(Text.empty());
+            }
+            this.serverPlaylistStatusText.visible = playlist;
+        }
+        if (this.serverPrevButton != null) {
+            this.serverPrevButton.visible = playlist;
+            this.serverPrevButton.active = playlist;
+        }
+        if (this.serverNextButton != null) {
+            this.serverNextButton.visible = playlist;
+            this.serverNextButton.active = playlist;
+        }
+        if (this.serverShuffleButton != null) {
+            boolean shuffleOn = serverSource != null && serverSource.isShuffle();
+            this.serverShuffleButton.setMessage(Text.literal(shuffleOn ? "Shuffle: On" : "Shuffle: Off"));
+            this.serverShuffleButton.visible = playlist;
+            this.serverShuffleButton.active = playlist;
+        }
+    }
+
+    private void onServerPlaylistPrevious() {
+        DisplaySource source = this.display.getSource();
+        if (source instanceof ServerDisplaySource serverSource && serverSource.previousVideo()) {
+            this.display.setSource(serverSource);
+            DisplayNetworking.sendDisplayUpdate(this.display);
+            updateServerPlaylistControls(serverSource);
+            this.dirty = true;
+        }
+    }
+
+    private void onServerPlaylistNext() {
+        DisplaySource source = this.display.getSource();
+        if (source instanceof ServerDisplaySource serverSource && serverSource.advanceVideo()) {
+            this.display.setSource(serverSource);
+            DisplayNetworking.sendDisplayUpdate(this.display);
+            updateServerPlaylistControls(serverSource);
+            this.dirty = true;
+        }
+    }
+
+    private void onServerPlaylistShuffle() {
+        DisplaySource source = this.display.getSource();
+        if (source instanceof ServerDisplaySource serverSource) {
+            serverSource.setShuffle(!serverSource.isShuffle());
+            this.display.setSource(serverSource);
+            DisplayNetworking.sendDisplayUpdate(this.display);
+            updateServerPlaylistControls(serverSource);
+            this.dirty = true;
+        }
+    }
+
     /**
      * Internal function to refresh the state of the "done" button, to activate it only if inputs are valid.
      * @param commit Set to true in order to commit these changes to the display block entity and send an update.
@@ -615,6 +752,14 @@ public class DisplayBlockScreen extends Screen {
             youtubeQuality = youtubeQualityRaw.name();
             youtubeVideoId = this.youtubeVideoIdField != null ? this.youtubeVideoIdField.getText() : this.youtubePlaylist.getChannel();
 
+        } else if (sourceType == SourceType.SERVER) {
+
+            String serverName = this.serverSourceNameField != null ? this.serverSourceNameField.getText() : "";
+            if (serverName.isBlank()) {
+                this.showError(ERR_SERVER_NOT_FOUND_TEXT);
+                return false;
+            }
+
         }
 
         this.showValid();
@@ -689,6 +834,19 @@ public class DisplayBlockScreen extends Screen {
                 } else {
                     this.display.setSource(new YoutubeDisplaySource(youtubeVideoId.isBlank() ? null : youtubeVideoId, youtubeQuality));
                 }
+            } else if (sourceType == SourceType.SERVER) {
+                String serverName = this.serverSourceNameField.getText();
+                DisplaySource existingSource = this.display.getSource();
+                if (existingSource instanceof ServerDisplaySource existingServerSource
+                        && serverName.equals(existingServerSource.getSourceName())) {
+                    // Name unchanged — keep the existing source object to preserve
+                    // playlist state (index, shuffle) that may have been modified
+                    // via Next/Prev/Shuffle buttons while the GUI was open.
+                    this.display.setSource(existingServerSource);
+                } else {
+                    // Name changed or first setup — create a fresh source.
+                    this.display.setSource(new ServerDisplaySource(serverName));
+                }
             }
 
             DisplayNetworking.sendDisplayUpdate(this.display);
@@ -743,12 +901,20 @@ public class DisplayBlockScreen extends Screen {
             if (trimmed.isEmpty()) {
                 continue;
             }
-            String playlistId = YoutubeClient.extractPlaylistId(trimmed);
-            if (playlistId != null) {
-                ids.add(trimmed);
+            // Try to extract a video ID from a full YouTube URL (e.g. watch?v=xxx or youtu.be/xxx).
+            String id = YoutubeClient.extractVideoId(trimmed);
+            if (id != null && !id.isBlank() && !id.equals(trimmed)) {
+                // extractVideoId successfully extracted a different ID from the URL.
+                ids.add(id);
                 continue;
             }
-            String id = YoutubeClient.extractVideoId(trimmed);
+            // Check if it's a bare playlist ID (PL..., LL..., etc.)
+            String playlistId = YoutubeClient.extractPlaylistId(trimmed);
+            if (playlistId != null) {
+                ids.add(playlistId);
+                continue;
+            }
+            // Last resort: treat as a bare video ID.
             if (id != null && !id.isBlank()) {
                 ids.add(id);
             }
@@ -844,7 +1010,8 @@ public class DisplayBlockScreen extends Screen {
 
         YOUTUBE(SOURCE_TYPE_YOUTUBE_TEXT),
         TWITCH(SOURCE_TYPE_TWITCH_TEXT),
-        RAW(SOURCE_TYPE_RAW_TEXT);
+        RAW(SOURCE_TYPE_RAW_TEXT),
+        SERVER(SOURCE_TYPE_SERVER_TEXT);
 
         private final Text text;
         SourceType(Text text) {

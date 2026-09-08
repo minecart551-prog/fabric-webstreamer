@@ -3,6 +3,7 @@ package fr.theorozier.webstreamer;
 import fr.theorozier.webstreamer.display.DisplayBlock;
 import fr.theorozier.webstreamer.display.DisplayBlockEntity;
 import fr.theorozier.webstreamer.display.DisplayNetworking;
+import fr.theorozier.webstreamer.server.ServerSourceRegistry;
 import fr.theorozier.webstreamer.display.TVBlock;
 import fr.theorozier.webstreamer.display.TVBlockEntity;
 import fr.theorozier.webstreamer.display.BigTVBlock;
@@ -10,8 +11,10 @@ import fr.theorozier.webstreamer.display.BigTVBlockEntity;
 import fr.theorozier.webstreamer.display.WebDisplayPBlock;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.item.v1.FabricItemSettings;
 import net.fabricmc.fabric.api.itemgroup.v1.FabricItemGroup;
+import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.fabric.api.object.builder.v1.block.entity.FabricBlockEntityTypeBuilder;
 import net.minecraft.block.Block;
 import net.minecraft.block.entity.BlockEntityType;
@@ -87,6 +90,12 @@ public class WebStreamerMod implements ModInitializer {
                 .build());
         DisplayNetworking.registerDisplayUpdateReceiver();
         ServerTickEvents.END_SERVER_TICK.register(DisplayNetworking::cleanupPlaybackViewers);
+        ServerSourceRegistry.load(FabricLoader.getInstance().getConfigDir());
+
+        // Broadcast server sources to players when they join
+        ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
+            DisplayNetworking.sendSourcesBroadcast(handler.getPlayer());
+        });
         
         LOGGER.info("WebStreamer started.");
 

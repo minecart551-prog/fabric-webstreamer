@@ -2,9 +2,11 @@ package fr.theorozier.webstreamer.display.render;
 
 import fr.theorozier.webstreamer.WebStreamerMod;
 import fr.theorozier.webstreamer.display.DisplayBlockEntity;
+import fr.theorozier.webstreamer.display.DisplayNetworking;
 import fr.theorozier.webstreamer.util.FFmpegLibrary;
 import fr.theorozier.webstreamer.display.audio.AudioStreamingBuffer;
 import fr.theorozier.webstreamer.display.audio.AudioStreamingSource;
+import fr.theorozier.webstreamer.display.source.ServerDisplaySource;
 import fr.theorozier.webstreamer.display.source.YoutubeDisplaySource;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
@@ -110,6 +112,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         super(key.uri(), res);
         this.display = key.display();
         this.currentUri = key.uri();
+        WebStreamerMod.LOGGER.info(makeLog("DisplayLayerVideo created with URI: {}"), this.currentUri);
         this.audioSource = new AudioStreamingSource(this.makeLog("audio"));
     }
 
@@ -205,6 +208,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 this.bufferPool.add(ByteBuffer.allocateDirect(FRAME_BUFFER_SIZE));
             }
 
+            WebStreamerMod.LOGGER.info(makeLog("Opening FFmpeg with URI: {}"), this.currentUri);
             FFmpegFrameGrabber fg = new FFmpegFrameGrabber(this.currentUri.toString());
             fg.setOption("user_agent", USER_AGENT);
             fg.setOption("headers", "Referer: https://www.youtube.com/");
@@ -261,9 +265,12 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             // Pre-fetch the next video's playlist so it's cached when this video ends.
             // This must run AFTER grabberReady is set so tryRestartNextVideo() can
             // safely proceed on the render thread without blocking on HTTP.
-            if (this.display != null && this.display.getSource() instanceof YoutubeDisplaySource ytSource
-                    && ytSource.hasPlaylist()) {
-                ytSource.prepareNextVideo();
+            if (this.display != null) {
+                if (this.display.getSource() instanceof YoutubeDisplaySource ytSource && ytSource.hasPlaylist()) {
+                    ytSource.prepareNextVideo();
+                } else if (this.display.getSource() instanceof ServerDisplaySource srvSource && srvSource.hasPlaylist()) {
+                    srvSource.prepareNextVideo();
+                }
             }
 
         } catch (Exception e) {
@@ -418,40 +425,77 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     }
 
     private boolean tryRestartNextVideo() {
-        if (!(this.display != null && this.display.getSource() instanceof YoutubeDisplaySource youtubeSource)) {
-            return false;
+        // Try YoutubeDisplaySource playlist
+        if (this.display != null && this.display.getSource() instanceof YoutubeDisplaySource youtubeSource) {
+            if (!youtubeSource.advanceVideo()) {
+                return false;
+            }
+            URI nextUri = youtubeSource.consumePreparedNextUri();
+            if (nextUri == null) {
+                nextUri = youtubeSource.getUri();
+            }
+            if (nextUri == null) {
+                return false;
+            }
+            DisplayNetworking.sendDisplayUpdate(this.display);
+            WebStreamerMod.LOGGER.info(makeLog("Restarting YouTube playlist with next video {}"), youtubeSource.getCurrentVideoId());
+            WebStreamerMod.LOGGER.info(makeLog("Next video URI: {}"), nextUri);
+            this.currentUri = nextUri;
+            this.failedGrabs = 0;
+            this.refTimestamp = -1;
+            this.pausedPlaybackMicros = 0;
+            this.playbackMicros = 0;
+            this.lastTickNanos = 0;
+            this.pendingVideoFrames.clear();
+            this.pendingAudioChunks.clear();
+            this.bufferPool.clear();
+            this.lastDecodedAudioTs = 0;
+            this.grabberFailed = false;
+            this.grabberFailureLogged = false;
+            this.audioSource.stop();
+            this.stopGrabber();
+            this.decodeFinished = false;
+            this.grabberPending = true;
+            this.startSetup();
+            return true;
         }
-        if (!youtubeSource.advanceVideo()) {
-            return false;
+
+        // Try ServerDisplaySource playlist
+        if (this.display != null && this.display.getSource() instanceof ServerDisplaySource serverSource) {
+            if (!serverSource.advanceVideo()) {
+                return false;
+            }
+            URI nextUri = serverSource.consumePreparedNextUri();
+            if (nextUri == null) {
+                nextUri = serverSource.getUri();
+            }
+            if (nextUri == null) {
+                return false;
+            }
+            DisplayNetworking.sendDisplayUpdate(this.display);
+            WebStreamerMod.LOGGER.info(makeLog("Restarting server playlist with next video {}"), serverSource.getCurrentVideoId());
+            WebStreamerMod.LOGGER.info(makeLog("Next video URI: {}"), nextUri);
+            this.currentUri = nextUri;
+            this.failedGrabs = 0;
+            this.refTimestamp = -1;
+            this.pausedPlaybackMicros = 0;
+            this.playbackMicros = 0;
+            this.lastTickNanos = 0;
+            this.pendingVideoFrames.clear();
+            this.pendingAudioChunks.clear();
+            this.bufferPool.clear();
+            this.lastDecodedAudioTs = 0;
+            this.grabberFailed = false;
+            this.grabberFailureLogged = false;
+            this.audioSource.stop();
+            this.stopGrabber();
+            this.decodeFinished = false;
+            this.grabberPending = true;
+            this.startSetup();
+            return true;
         }
-        // Use the pre-resolved URI from prepareNextVideo() to avoid HTTP on the render thread.
-        // Fall back to getUri() only if the pre-fetch failed or wasn't ready.
-        URI nextUri = youtubeSource.consumePreparedNextUri();
-        if (nextUri == null) {
-            nextUri = youtubeSource.getUri();
-        }
-        if (nextUri == null) {
-            return false;
-        }
-        WebStreamerMod.LOGGER.info(makeLog("Restarting YouTube playlist with next video {}"), youtubeSource.getCurrentVideoId());
-        this.currentUri = nextUri;
-        this.failedGrabs = 0;
-        this.refTimestamp = -1;
-        this.pausedPlaybackMicros = 0;
-        this.playbackMicros = 0;
-        this.lastTickNanos = 0;
-        this.pendingVideoFrames.clear();
-        this.pendingAudioChunks.clear();
-        this.bufferPool.clear();
-        this.lastDecodedAudioTs = 0;
-        this.grabberFailed = false;
-        this.grabberFailureLogged = false;
-        this.audioSource.stop();
-        this.stopGrabber();
-        this.decodeFinished = false;
-        this.grabberPending = true;
-        this.startSetup();
-        return true;
+
+        return false;
     }
 
     private void loopVideo() {
@@ -628,9 +672,12 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
                 if (this.tryRestartNextVideo()) {
                     // Pre-fetch the next video after this one
-                    if (this.display != null && this.display.getSource() instanceof YoutubeDisplaySource ytSource
-                            && ytSource.hasPlaylist()) {
-                        ytSource.prepareNextVideo();
+                    if (this.display != null) {
+                        if (this.display.getSource() instanceof YoutubeDisplaySource ytSource && ytSource.hasPlaylist()) {
+                            ytSource.prepareNextVideo();
+                        } else if (this.display.getSource() instanceof ServerDisplaySource srvSource && srvSource.hasPlaylist()) {
+                            srvSource.prepareNextVideo();
+                        }
                     }
                     return;
                 }
