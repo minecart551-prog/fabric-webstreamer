@@ -30,6 +30,7 @@ public class DisplayLayerGif extends DisplayLayerSimple {
     private static final int MAX_FAILED_GRABS = 5;
     private static final int FRAME_BUFFER_POOL_SIZE = 8;
     private static final int FRAME_BUFFER_SIZE = 512 * 1024;
+    private static final int MAX_PENDING_FRAMES = 8;
     private static final String USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
                     "AppleWebKit/537.36 (KHTML, like Gecko) " +
@@ -95,9 +96,23 @@ public class DisplayLayerGif extends DisplayLayerSimple {
 
     private void startSetup() {
         this.decodeThread = new Thread(() -> {
-            downloadAndOpenGrabber();
-            if (this.grabberReady && !this.destroyed) {
-                backgroundDecodeLoop();
+            try {
+                downloadAndOpenGrabber();
+                if (this.grabberReady && !this.destroyed) {
+                    backgroundDecodeLoop();
+                }
+            } finally {
+                // Decode thread owns the grabber lifecycle.
+                // Release in finally to prevent use-after-free when stopGrabber()
+                // signals decodeFinished + interrupt while we're mid-grab().
+                this.grabberReady = false;
+                this.grabberPending = false;
+                if (this.grabber != null) {
+                    try { this.grabber.releaseUnsafe(); } catch (Exception ignored) { }
+                    this.grabber = null;
+                }
+                deleteTempFile(this.tempFile);
+                this.tempFile = null;
             }
         }, "WebStreamer-gif-" + Integer.toHexString(System.identityHashCode(this)));
         this.decodeThread.setDaemon(true);
@@ -185,6 +200,12 @@ public class DisplayLayerGif extends DisplayLayerSimple {
     private void backgroundDecodeLoop() {
         try {
             while (!this.destroyed && !this.decodeFinished) {
+                // Throttle: wait if too many frames are pending (prevents unbounded memory growth)
+                while (!this.destroyed && !this.decodeFinished && this.pendingFrames.size() >= MAX_PENDING_FRAMES) {
+                    Thread.sleep(10);
+                }
+                if (this.destroyed || this.decodeFinished) break;
+
                 ByteBuffer buf = this.bufferPool.poll(100, TimeUnit.MILLISECONDS);
                 if (buf == null) {
                     continue;
@@ -260,10 +281,15 @@ public class DisplayLayerGif extends DisplayLayerSimple {
             // finally block. Joining would block the render thread for up to
             // 2 seconds per layer, causing massive freezes when many layers
             // are cleaned up simultaneously (e.g. after the 60 s orphan timeout).
-        }
-        if (this.grabber != null) {
+        } else if (this.grabber != null) {
+            // Decode thread never started (destroyed during download).
+            // Safe to release here since no other thread is using the grabber.
             try { this.grabber.releaseUnsafe(); } catch (Exception ignored) { }
             this.grabber = null;
+            deleteTempFile(this.tempFile);
+            this.tempFile = null;
+            this.grabberReady = false;
+            this.grabberPending = false;
         }
         this.pendingFrames.clear();
         this.bufferPool.clear();
