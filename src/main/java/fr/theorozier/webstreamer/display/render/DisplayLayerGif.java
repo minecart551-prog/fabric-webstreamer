@@ -107,6 +107,11 @@ public class DisplayLayerGif extends DisplayLayerSimple {
     private void downloadAndOpenGrabber() {
         if (this.destroyed) return;
 
+        if (this.uri.getScheme() == null) {
+            WebStreamerMod.LOGGER.error("[DisplayLayerGif] URI has no scheme: {}", this.uri);
+            return;
+        }
+
         FFmpegLibrary.ensureInitialized();
 
         Path tmp = null;

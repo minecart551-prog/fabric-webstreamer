@@ -90,6 +90,7 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 	// Timing //
 	/** Time in nanoseconds (monotonic) of the last internal cleanup. */
 	private long lastCleanup = 0;
+	private boolean linearFilterApplied = false;
 
     public DisplayLayerHls(URI uri, DisplayLayerResources res) {
 
@@ -458,6 +459,10 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 		if (frame != null) {
 			this.profiler.push("upload_image");
 			this.tex.upload(frame);
+			if (!this.linearFilterApplied) {
+				this.linearFilterApplied = true;
+				this.tex.setLinearFilter();
+			}
 			this.profiler.swap("play_audio");
 			if (this.audioInRange) {
 				if (!this.audioSource.isPlaying()) {

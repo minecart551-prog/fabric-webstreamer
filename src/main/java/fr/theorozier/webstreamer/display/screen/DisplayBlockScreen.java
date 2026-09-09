@@ -878,6 +878,12 @@ public class DisplayBlockScreen extends Screen {
             this.display.setRotation(rotX, rotY, rotZ);
 
             if (sourceType == SourceType.RAW) {
+                if (rawUri != null && rawUri.getScheme() == null) {
+                    // Local path with no scheme — prefix with local HTTP server
+                    String path = rawUri.getPath();
+                    if (path == null || path.isEmpty()) path = "/" + rawUri.toString();
+                    rawUri = URI.create("http://localhost:25600" + (path.startsWith("/") ? path : "/" + path));
+                }
                 this.display.setSource(new RawDisplaySource(rawUri));
             } else if (sourceType == SourceType.TWITCH) {
                 this.display.setSource(new TwitchDisplaySource(twitchChannel, twitchQuality));

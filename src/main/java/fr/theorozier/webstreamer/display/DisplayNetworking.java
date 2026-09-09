@@ -111,7 +111,6 @@ public class DisplayNetworking {
             }
             client.executeSync(() -> {
                 clientSourceCache = Collections.unmodifiableMap(map);
-                WebStreamerMod.LOGGER.info("[Client] Received server sources broadcast: {} source(s)", map.size());
             });
         });
     }
@@ -124,26 +123,27 @@ public class DisplayNetworking {
      * Server-side only, send the full sources map to a single player.
      */
     public static void sendSourcesBroadcast(ServerPlayerEntity player) {
-        Map<String, String> sources = ServerSourceRegistry.getAll();
+        Map<String, String> rawSources = ServerSourceRegistry.getAll();
         PacketByteBuf buf = PacketByteBufs.create();
-        buf.writeVarInt(sources.size());
-        for (Map.Entry<String, String> entry : sources.entrySet()) {
+        buf.writeVarInt(rawSources.size());
+        for (Map.Entry<String, String> entry : rawSources.entrySet()) {
             buf.writeString(entry.getKey());
-            buf.writeString(entry.getValue());
+            buf.writeString(ServerSourceRegistry.resolve(entry.getKey()));
         }
         ServerPlayNetworking.send(player, SERVER_SOURCES_BROADCAST_PACKET_ID, buf);
     }
 
     /**
      * Server-side only, broadcast the full sources map to all connected players.
+     * Local paths (starting with /) are resolved to HTTP URLs.
      */
     public static void broadcastSourcesToAll(MinecraftServer server) {
-        Map<String, String> sources = ServerSourceRegistry.getAll();
+        Map<String, String> rawSources = ServerSourceRegistry.getAll();
         PacketByteBuf buf = PacketByteBufs.create();
-        buf.writeVarInt(sources.size());
-        for (Map.Entry<String, String> entry : sources.entrySet()) {
+        buf.writeVarInt(rawSources.size());
+        for (Map.Entry<String, String> entry : rawSources.entrySet()) {
             buf.writeString(entry.getKey());
-            buf.writeString(entry.getValue());
+            buf.writeString(ServerSourceRegistry.resolve(entry.getKey()));
         }
         for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
             ServerPlayNetworking.send(player, SERVER_SOURCES_BROADCAST_PACKET_ID, buf);

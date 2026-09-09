@@ -11,6 +11,7 @@ import fr.theorozier.webstreamer.display.BigTVBlockEntity;
 import fr.theorozier.webstreamer.display.WebDisplayPBlock;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.item.v1.FabricItemSettings;
 import net.fabricmc.fabric.api.itemgroup.v1.FabricItemGroup;
@@ -92,6 +93,34 @@ public class WebStreamerMod implements ModInitializer {
         ServerTickEvents.END_SERVER_TICK.register(DisplayNetworking::cleanupPlaybackViewers);
         ServerSourceRegistry.load(FabricLoader.getInstance().getConfigDir());
 
+        // Restart HTTP server when a server starts (handles singleplayer world re-open)
+        ServerLifecycleEvents.SERVER_STARTING.register(server -> {
+            ServerSourceRegistry.restartHttpServerIfNeeded(FabricLoader.getInstance().getConfigDir());
+
+            // 1. Check WEBSTREAMER_IP env var
+            String envIp = System.getenv("WEBSTREAMER_IP");
+            if (envIp != null && !envIp.isEmpty()) {
+                ServerSourceRegistry.setServerIp(envIp);
+            } else {
+                // 2. Read http-ip from webstreamer's server.properties
+                String configuredIp = ServerSourceRegistry.readHttpIp(FabricLoader.getInstance().getConfigDir());
+                if (configuredIp != null && !configuredIp.isEmpty()) {
+                    ServerSourceRegistry.setServerIp(configuredIp);
+                } else {
+                    // 3. Auto-detect from network interfaces
+                    String detected = detectServerIp();
+                    if (detected != null) {
+                        ServerSourceRegistry.setServerIp(detected);
+                    }
+                }
+            }
+        });
+
+        // Stop HTTP server on server shutdown
+        ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+            ServerSourceRegistry.stopHttpServer();
+        });
+
         // Broadcast server sources to players when they join
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
             DisplayNetworking.sendSourcesBroadcast(handler.getPlayer());
@@ -99,6 +128,43 @@ public class WebStreamerMod implements ModInitializer {
         
         LOGGER.info("WebStreamer started.");
 
+    }
+
+    /**
+     * Detect the server's LAN IP by scanning network interfaces.
+     * Skips loopback, down interfaces, and virtual/docker ranges.
+     * Returns null if no suitable address found.
+     */
+    private static String detectServerIp() {
+        try {
+            String fallback = null;
+            java.util.Enumeration<java.net.NetworkInterface> interfaces = java.net.NetworkInterface.getNetworkInterfaces();
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                java.net.NetworkInterface ni = interfaces.nextElement();
+                if (ni.isLoopback() || !ni.isUp() || ni.isVirtual()) continue;
+                java.util.Enumeration<java.net.InetAddress> addrs = ni.getInetAddresses();
+                while (addrs.hasMoreElements()) {
+                    java.net.InetAddress addr = addrs.nextElement();
+                    if (!(addr instanceof java.net.Inet4Address)) continue;
+                    String ip = addr.getHostAddress();
+                    // Skip Docker/container ranges
+                    if (ip.startsWith("172.17.") || ip.startsWith("172.18.") ||
+                        ip.startsWith("172.19.") || ip.startsWith("172.2") ||
+                        ip.startsWith("172.3")) continue;
+                    // Prefer non-private IPs (public/WAN)
+                    if (!addr.isSiteLocalAddress()) {
+                        return ip;
+                    }
+                    // Remember first private LAN IP as fallback
+                    if (fallback == null) {
+                        fallback = ip;
+                    }
+                }
+            }
+            return fallback;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
 }

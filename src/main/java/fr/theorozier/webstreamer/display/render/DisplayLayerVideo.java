@@ -68,6 +68,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     private Thread decodeThread;
     private volatile boolean decodeFinished = false;
     private long lastDecodedAudioTs = 0;
+    private boolean linearFilterApplied = false;
 
     private static class RawAudioChunk {
         final short[] pcm;
@@ -112,7 +113,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         super(key.uri(), res);
         this.display = key.display();
         this.currentUri = key.uri();
-        WebStreamerMod.LOGGER.info(makeLog("DisplayLayerVideo created with URI: {}"), this.currentUri);
         this.audioSource = new AudioStreamingSource(this.makeLog("audio"));
     }
 
@@ -623,6 +623,10 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                         pvf = this.pendingVideoFrames.poll();
                     }
                     this.tex.uploadRaw(pvf.data, GL11.GL_RGB8, pvf.width, pvf.height, pvf.stride / 3, GL12.GL_BGR, 4);
+                    if (!this.linearFilterApplied) {
+                        this.linearFilterApplied = true;
+                        this.tex.setLinearFilter();
+                    }
                     this.bufferPool.add(pvf.data);
                     this.playbackMicros = pvf.timestamp;
                     framesDisplayed++;
