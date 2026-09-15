@@ -335,7 +335,7 @@ public class ServerDisplaySource extends DisplaySource {
     // -------------------------------------------------------------------------
 
     private static boolean isYouTubeUrl(String url) {
-        return url.contains("youtube.com/watch") || url.contains("youtube.com/shorts/") || url.contains("youtu.be/");
+        return url.contains("youtube.com/watch") || url.contains("youtube.com/shorts/") || url.contains("youtube.com/playlist") || url.contains("youtu.be/");
     }
 
     private static URI resolveYouTubeUrl(String url) {

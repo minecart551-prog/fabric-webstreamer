@@ -301,10 +301,17 @@ public class DisplayLayerGif extends DisplayLayerSimple {
 
     private void deleteTempFile(Path path) {
         if (path != null) {
-            try {
-                Files.deleteIfExists(path);
-            } catch (IOException e) {
-                WebStreamerMod.LOGGER.warn(makeLog("Could not delete temp file: {}"), path);
+            for (int attempt = 0; attempt < 3; attempt++) {
+                try {
+                    Files.deleteIfExists(path);
+                    return;
+                } catch (IOException e) {
+                    if (attempt < 2) {
+                        try { Thread.sleep(50); } catch (InterruptedException ignored) { }
+                    } else {
+                        WebStreamerMod.LOGGER.warn(makeLog("Could not delete temp file after retries: {}"), path);
+                    }
+                }
             }
         }
     }

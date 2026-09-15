@@ -4,6 +4,7 @@ import fr.theorozier.webstreamer.display.DisplayBlock;
 import fr.theorozier.webstreamer.display.DisplayBlockEntity;
 import fr.theorozier.webstreamer.display.DisplayNetworking;
 import fr.theorozier.webstreamer.server.ServerSourceRegistry;
+import fr.theorozier.webstreamer.server.WebStreamerCommands;
 import fr.theorozier.webstreamer.display.TVBlock;
 import fr.theorozier.webstreamer.display.TVBlockEntity;
 import fr.theorozier.webstreamer.display.BigTVBlock;
@@ -12,6 +13,7 @@ import fr.theorozier.webstreamer.display.WebDisplayPBlock;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.command.v1.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.item.v1.FabricItemSettings;
 import net.fabricmc.fabric.api.itemgroup.v1.FabricItemGroup;
@@ -32,6 +34,8 @@ public class WebStreamerMod implements ModInitializer {
 
     public static final Logger LOGGER = LoggerFactory.getLogger("WebStreamer");
     public static final String MOD_ID = "webstreamer";
+
+    private static java.nio.file.Path configDir;
 
     public static Block DISPLAY_BLOCK;
     public static Block DISPLAY_P_BLOCK;
@@ -91,11 +95,13 @@ public class WebStreamerMod implements ModInitializer {
                 .build());
         DisplayNetworking.registerDisplayUpdateReceiver();
         ServerTickEvents.END_SERVER_TICK.register(DisplayNetworking::cleanupPlaybackViewers);
-        ServerSourceRegistry.load(FabricLoader.getInstance().getConfigDir());
+        CommandRegistrationCallback.EVENT.register(WebStreamerCommands::register);
+        configDir = FabricLoader.getInstance().getConfigDir();
+        ServerSourceRegistry.load(configDir);
 
         // Restart HTTP server when a server starts (handles singleplayer world re-open)
         ServerLifecycleEvents.SERVER_STARTING.register(server -> {
-            ServerSourceRegistry.restartHttpServerIfNeeded(FabricLoader.getInstance().getConfigDir());
+            ServerSourceRegistry.restartHttpServerIfNeeded(configDir);
 
             // 1. Check WEBSTREAMER_IP env var
             String envIp = System.getenv("WEBSTREAMER_IP");
@@ -103,7 +109,7 @@ public class WebStreamerMod implements ModInitializer {
                 ServerSourceRegistry.setServerIp(envIp);
             } else {
                 // 2. Read http-ip from webstreamer's server.properties
-                String configuredIp = ServerSourceRegistry.readHttpIp(FabricLoader.getInstance().getConfigDir());
+                String configuredIp = ServerSourceRegistry.readHttpIp(configDir);
                 if (configuredIp != null && !configuredIp.isEmpty()) {
                     ServerSourceRegistry.setServerIp(configuredIp);
                 } else {
@@ -114,6 +120,9 @@ public class WebStreamerMod implements ModInitializer {
                     }
                 }
             }
+
+            // Re-read sources.txt and pick new random URLs for this server session
+            ServerSourceRegistry.reload();
         });
 
         // Stop HTTP server on server shutdown
@@ -128,6 +137,13 @@ public class WebStreamerMod implements ModInitializer {
         
         LOGGER.info("WebStreamer started.");
 
+    }
+
+    /**
+     * @return The config directory path, available after onInitialize().
+     */
+    public static java.nio.file.Path getConfigDir() {
+        return configDir;
     }
 
     /**

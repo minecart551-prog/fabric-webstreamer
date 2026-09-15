@@ -10,24 +10,24 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 import java.util.Properties;
 
 /**
  * Server-side registry that loads named display sources from
- * {@code config/webstreamer/sources.txt}. Each line maps a name to a URL:
- * {@code name:URL}. The file is read once on server start.
+ * {@code config/webstreamer/sources.txt}. Each line maps a name to one or more
+ * comma-separated URLs: {@code name:url1,url2,url3}. On load/reload, one URL
+ * is randomly selected per source.
  *
  * <p>Local paths (starting with {@code /}) are auto-detected and resolved
  * to HTTP URLs served by the embedded {@link WebStreamerHttpServer}.</p>
  */
 public class ServerSourceRegistry {
 
-    private static final String FILE_HEADER = "# WebStreamer server sources — one entry per line, format: name:URL\n# Local paths starting with / are served from the files/ directory.";
+    private static final String FILE_HEADER = "# WebStreamer server sources — one entry per line, format: name:URL\n# Multiple URLs can be comma-separated; one is picked randomly per restart/reload.\n# Local paths starting with / are served from the files/ directory.";
 
-    private static Map<String, String> sources = Collections.emptyMap();
+    private static Map<String, List<String>> sources = Collections.emptyMap();
+    private static Map<String, String> selectedSources = Collections.emptyMap();
     private static WebStreamerHttpServer httpServer;
     private static String serverIp = "localhost";
 
@@ -85,8 +85,31 @@ public class ServerSourceRegistry {
             }
         }
 
-        HashMap<String, String> loaded = new HashMap<>();
-        boolean hasLocalPaths = false;
+        loadSources(file);
+        startHttpServer(filesDir, httpPort);
+    }
+
+    /**
+     * Re-read sources.txt, pick new random URLs, and resolve them.
+     * Returns the number of sources loaded, or -1 on error.
+     */
+    public static int reload() {
+        Path configDir = fr.theorozier.webstreamer.WebStreamerMod.getConfigDir();
+        if (configDir == null) {
+            WebStreamerMod.LOGGER.error("[Server] Cannot reload: config dir not available");
+            return -1;
+        }
+        Path file = configDir.resolve("webstreamer").resolve("sources.txt");
+        if (!Files.exists(file)) {
+            WebStreamerMod.LOGGER.error("[Server] Cannot reload: sources.txt does not exist");
+            return -1;
+        }
+        loadSources(file);
+        return selectedSources.size();
+    }
+
+    private static void loadSources(Path file) {
+        HashMap<String, List<String>> loaded = new HashMap<>();
         try (BufferedReader reader = Files.newBufferedReader(file)) {
             String line;
             int lineNum = 0;
@@ -102,16 +125,25 @@ public class ServerSourceRegistry {
                     continue;
                 }
                 String name = line.substring(0, colon).trim();
-                String url = line.substring(colon + 1).trim();
-                if (name.isEmpty() || url.isEmpty()) {
+                String urlsPart = line.substring(colon + 1).trim();
+                if (name.isEmpty() || urlsPart.isEmpty()) {
                     WebStreamerMod.LOGGER.warn("[Server] sources.txt line {}: empty name or URL, skipping", lineNum);
                     continue;
                 }
-                // Detect local paths (starting with /)
-                if (url.startsWith("/")) {
-                    hasLocalPaths = true;
+                // Split on commas, trim whitespace around each URL
+                String[] rawUrls = urlsPart.split(",");
+                List<String> urls = new ArrayList<>();
+                for (String raw : rawUrls) {
+                    String url = raw.trim();
+                    if (!url.isEmpty()) {
+                        urls.add(url);
+                    }
                 }
-                loaded.put(name, url);
+                if (urls.isEmpty()) {
+                    WebStreamerMod.LOGGER.warn("[Server] sources.txt line {}: no valid URLs after parsing, skipping", lineNum);
+                    continue;
+                }
+                loaded.put(name, urls);
             }
         } catch (IOException e) {
             WebStreamerMod.LOGGER.error("[Server] Failed to read sources file: {}", file, e);
@@ -119,10 +151,26 @@ public class ServerSourceRegistry {
         }
 
         sources = Collections.unmodifiableMap(loaded);
-        WebStreamerMod.LOGGER.info("[Server] Loaded {} server source(s) from {}", sources.size(), file);
 
-        // Start HTTP server if there are local paths or to be ready for them
-        startHttpServer(filesDir, httpPort);
+        // Pick one random URL per source and resolve local paths to HTTP URLs
+        HashMap<String, String> selected = new HashMap<>();
+        Random rng = new Random();
+        for (Map.Entry<String, List<String>> entry : loaded.entrySet()) {
+            String name = entry.getKey();
+            List<String> urls = entry.getValue();
+            String picked = urls.get(rng.nextInt(urls.size()));
+            // Resolve local paths to HTTP URLs
+            if (picked.startsWith("/")) {
+                if (httpServer != null && httpServer.isRunning()) {
+                    picked = "http://" + serverIp + ":" + httpServer.getPort() + picked;
+                } else {
+                    WebStreamerMod.LOGGER.warn("[Server] Source '{}' has local path '{}' but HTTP server is not running", name, entry.getValue().get(0));
+                }
+            }
+            selected.put(name, picked);
+        }
+        selectedSources = Collections.unmodifiableMap(selected);
+        WebStreamerMod.LOGGER.info("[Server] Loaded {} server source(s) from {}", selectedSources.size(), file);
     }
 
     /**
@@ -208,29 +256,18 @@ public class ServerSourceRegistry {
     }
 
     /**
-     * Resolve a source name to its URL. Local paths are converted to HTTP URLs.
+     * Resolve a source name to its selected URL. Local paths are converted to HTTP URLs.
      * @return The URL string, or {@code null} if the name is not registered.
      */
     public static String resolve(String name) {
-        String raw = sources.get(name);
-        if (raw == null) {
-            return null;
-        }
-        // Convert local paths to HTTP URLs
-        if (raw.startsWith("/")) {
-            if (httpServer != null && httpServer.isRunning()) {
-                return "http://" + serverIp + ":" + httpServer.getPort() + raw;
-            }
-            WebStreamerMod.LOGGER.warn("[Server] Source '{}' has local path '{}' but HTTP server is not running", name, raw);
-        }
-        return raw;
+        return selectedSources.get(name);
     }
 
     /**
-     * @return An unmodifiable view of all registered sources (name → URL).
+     * @return An unmodifiable view of all selected sources (name → resolved URL).
      */
     public static Map<String, String> getAll() {
-        return sources;
+        return selectedSources;
     }
 
     /**

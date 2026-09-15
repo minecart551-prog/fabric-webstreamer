@@ -500,7 +500,7 @@ public class DisplayBlockScreen extends Screen {
             ButtonWidget serverRandomStartButton = ButtonWidget.builder(
                     Text.literal(initialServerRandomStart ? "Random Start: On" : "Random Start: Off"),
                     button -> this.onServerRandomStartFrame())
-                    .dimensions(xHalf + 4, ySourceTop + 55, 154, 20)
+                    .dimensions(xHalf - 154, ySourceTop + 55, 75, 20)
                     .build();
             this.addDrawableChild(serverRandomStartButton);
 
