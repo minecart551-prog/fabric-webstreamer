@@ -340,6 +340,22 @@ public class YoutubeClient {
                             }
                         }
                     }
+                    // Format: https://www.youtube.com/shorts/VIDEO_ID (YouTube Shorts)
+                    String path = url.getPath();
+                    if (path != null) {
+                        for (String prefix : new String[] { "/shorts/", "/embed/", "/v/" }) {
+                            if (path.startsWith(prefix)) {
+                                String id = path.substring(prefix.length());
+                                int slash = id.indexOf('/');
+                                if (slash >= 0) {
+                                    id = id.substring(0, slash);
+                                }
+                                if (!id.isBlank()) {
+                                    return id;
+                                }
+                            }
+                        }
+                    }
                 } else if (host.contains("youtu.be")) {
                     // Format: https://youtu.be/VIDEO_ID
                     String path = url.getPath();

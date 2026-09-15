@@ -38,8 +38,8 @@ public class ServerDisplaySource extends DisplaySource {
     // Playlist support — populated when the resolved URL is a YouTube playlist.
     private List<String> videoIds;
     private int currentVideoIndex = 0;
-    private boolean shuffle = false;
-    private boolean randomStartFrame = false;
+    private boolean shuffle = true;
+    private boolean randomStartFrame = true;
     private final Random random = new Random();
 
     /**
@@ -335,7 +335,7 @@ public class ServerDisplaySource extends DisplaySource {
     // -------------------------------------------------------------------------
 
     private static boolean isYouTubeUrl(String url) {
-        return url.contains("youtube.com/watch") || url.contains("youtu.be/");
+        return url.contains("youtube.com/watch") || url.contains("youtube.com/shorts/") || url.contains("youtu.be/");
     }
 
     private static URI resolveYouTubeUrl(String url) {

@@ -488,15 +488,15 @@ public class DisplayBlockScreen extends Screen {
             this.addDrawableChild(serverPrevButton);
             this.addDrawableChild(serverNextButton);
 
-            boolean initialServerShuffle = source instanceof ServerDisplaySource srvSrc && srvSrc.isShuffle();
+            boolean initialServerShuffle = !(source instanceof ServerDisplaySource srvSrc) || srvSrc.isShuffle();
             serverShuffleButton = ButtonWidget.builder(
                     Text.literal(initialServerShuffle ? "Shuffle: On" : "Shuffle: Off"),
                     button -> this.onServerPlaylistShuffle())
-                    .dimensions(xHalf - 154, ySourceTop + 55, 75, 20)
+                    .dimensions(xHalf + 162, ySourceTop + 55, 75, 20)
                     .build();
             this.addDrawableChild(serverShuffleButton);
 
-            boolean initialServerRandomStart = source instanceof ServerDisplaySource srvSrc2 && srvSrc2.isRandomStartFrame();
+            boolean initialServerRandomStart = !(source instanceof ServerDisplaySource srvSrc2) || srvSrc2.isRandomStartFrame();
             ButtonWidget serverRandomStartButton = ButtonWidget.builder(
                     Text.literal(initialServerRandomStart ? "Random Start: On" : "Random Start: Off"),
                     button -> this.onServerRandomStartFrame())
@@ -661,10 +661,8 @@ public class DisplayBlockScreen extends Screen {
             this.serverNextButton.active = playlist;
         }
         if (this.serverShuffleButton != null) {
-            boolean shuffleOn = serverSource != null && serverSource.isShuffle();
+            boolean shuffleOn = serverSource == null || serverSource.isShuffle();
             this.serverShuffleButton.setMessage(Text.literal(shuffleOn ? "Shuffle: On" : "Shuffle: Off"));
-            this.serverShuffleButton.visible = playlist;
-            this.serverShuffleButton.active = playlist;
         }
     }
 
