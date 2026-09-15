@@ -224,7 +224,7 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
 
                 boolean inRange = !(audioDistance > 0f && playerDist > audioDistance);
 
-                if (entity.getWorld() != null && DisplayNetworking.shouldSendPlaybackRangeUpdate(entity.getWorld().getRegistryKey(), pos, inRange)) {
+                if (entity.getWorld() != null && DisplayNetworking.shouldSendPlaybackRangeUpdate(entity.getWorld().getRegistryKey(), pos, inRange, entity.isPlaybackPaused())) {
                     DisplayNetworking.sendPlaybackState(entity, inRange);
                 }
 

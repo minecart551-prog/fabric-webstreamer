@@ -1,6 +1,5 @@
 package fr.theorozier.webstreamer.display.render;
 
-import fr.theorozier.webstreamer.WebStreamerMod;
 import fr.theorozier.webstreamer.display.DisplayBlockEntity;
 import fr.theorozier.webstreamer.display.source.DisplaySource;
 import net.fabricmc.api.EnvType;

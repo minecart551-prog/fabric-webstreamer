@@ -292,8 +292,10 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 Frame frame = this.grabber.grab();
                 if (frame == null) {
                     this.bufferPool.add(buf);
-                    if (this.display != null && this.display.getSource() instanceof YoutubeDisplaySource yt
-                            && yt.hasPlaylist()) {
+                    boolean playlistSource = this.display != null && (
+                            (this.display.getSource() instanceof YoutubeDisplaySource yt && yt.hasPlaylist()) ||
+                            (this.display.getSource() instanceof ServerDisplaySource srv && srv.hasPlaylist()));
+                    if (playlistSource) {
                         this.decodeFinished = true;
                         break;
                     }

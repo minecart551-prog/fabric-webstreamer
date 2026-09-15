@@ -42,6 +42,8 @@ public class DisplayNetworking {
 
 	private static final Map<PlaybackKey, Set<UUID>> PLAYBACK_VIEWERS = new HashMap<>();
 	private static final Map<PlaybackKey, Boolean> CLIENT_PLAYBACK_RANGE = new HashMap<>();
+	/** Last time the client sent a playback state packet per display (for the self-heal resync). */
+	private static final Map<PlaybackKey, Long> CLIENT_PLAYBACK_SENT_AT = new HashMap<>();
 
 	/** Client-side cache of server sources (name → URL), populated by server broadcasts. */
 	private static volatile Map<String, String> clientSourceCache = Map.of();
@@ -208,6 +210,13 @@ public class DisplayNetworking {
             }
         } else if (!hadViewers) {
             updatePlaybackPaused(world, pos, false);
+        } else if (inRange) {
+            // A viewer was already tracked, but the entity may still be stuck
+            // paused (e.g. stale playbackPaused in NBT after a chunk reload or
+            // because the client-side toggle raced a server update). Reconcile
+            // whenever we receive an in-range report for a paused display.
+            // updatePlaybackPaused() no-ops when the state hasn't changed.
+            updatePlaybackPaused(world, pos, false);
         }
     }
 
@@ -243,14 +252,29 @@ public class DisplayNetworking {
         }
     }
 
-    public static boolean shouldSendPlaybackRangeUpdate(RegistryKey<World> world, BlockPos pos, boolean inRange) {
+    /**
+     * Client-side only, decide whether a playback state packet should be sent.
+     * The packet is sent when the in-range state changes, and additionally as a
+     * periodic self-heal resync while the player is in range but the display is
+     * still paused (see {@link #handlePlaybackState}).
+     */
+    public static boolean shouldSendPlaybackRangeUpdate(RegistryKey<World> world, BlockPos pos, boolean inRange, boolean displayPaused) {
         PlaybackKey key = new PlaybackKey(world, pos);
         Boolean previous = CLIENT_PLAYBACK_RANGE.get(key);
-        if (previous != null && previous == inRange) {
-            return false;
+        Long sentAt = CLIENT_PLAYBACK_SENT_AT.get(key);
+        long now = System.nanoTime();
+        if (previous == null || previous != inRange) {
+            CLIENT_PLAYBACK_RANGE.put(key, inRange);
+            CLIENT_PLAYBACK_SENT_AT.put(key, now);
+            return true;
         }
-        CLIENT_PLAYBACK_RANGE.put(key, inRange);
-        return true;
+        // Self-heal: re-register presence while the display is stuck paused so
+        // the server can reconcile it. Rate-limited to avoid packet spam.
+        if (inRange && displayPaused && (sentAt == null || now - sentAt >= 2_000_000_000L)) {
+            CLIENT_PLAYBACK_SENT_AT.put(key, now);
+            return true;
+        }
+        return false;
     }
 
     private static record PlaybackKey(RegistryKey<World> world, BlockPos pos) { }
