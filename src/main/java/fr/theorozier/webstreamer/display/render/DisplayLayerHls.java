@@ -131,17 +131,13 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 
 	@Override
 	public void pushAudioSource(Vec3i pos, float dist, float audioDistance, float audioVolume) {
+        // Out of range audio is muted, not stopped, so that the audio pipeline
+        // keeps streaming continuously and re-entering the range doesn't require
+        // a costly/glitchy rebuild of the OpenAL source.
         this.audioInRange = audioDistance > 0f && dist <= audioDistance;
-        if (!this.audioInRange) {
-            if (this.audioSource.isPlaying()) {
-                this.audioSource.stop();
-            }
-            return;
-        }
-
 		this.audioSource.setPosition(pos);
 		this.audioSource.setAttenuation(audioDistance);
-		this.audioSource.setVolume(audioVolume);
+		this.audioSource.setVolume(this.audioInRange ? audioVolume : 0f);
 	}
 
     @Override
@@ -273,11 +269,7 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 			if (toBeContinued) {
 				try {
 					this.grabber.grabRemaining(buffer -> {
-						if (this.audioInRange) {
-							this.audioSource.queueBuffer(buffer);
-						} else {
-							buffer.free();
-						}
+						this.audioSource.queueBuffer(buffer);
 					});
 				} catch (IOException e) {
 					WebStreamerMod.LOGGER.error(makeLog("Failed to grab remaining from current grabber."), e);
@@ -443,19 +435,9 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 		long segmentTimestampMicros = (long) (this.segmentTimestamp * 1000000);
 
         this.profiler.push("grab_frame");
-		Frame frame = this.grabber.grabAt(segmentTimestampMicros, buffer -> {
-			if (this.audioInRange) {
-				this.audioSource.queueBuffer(buffer);
-			} else {
-				buffer.free();
-			}
-		});
+		Frame frame = this.grabber.grabAt(segmentTimestampMicros, this.audioSource::queueBuffer);
 		this.profiler.pop();
-		
-		if (!this.audioInRange && this.audioSource.isPlaying()) {
-			this.audioSource.stop();
-		}
-		
+
 		if (frame != null) {
 			this.profiler.push("upload_image");
 			this.tex.upload(frame);
@@ -464,14 +446,12 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 				this.tex.setLinearFilter();
 			}
 			this.profiler.swap("play_audio");
-			if (this.audioInRange) {
-				if (!this.audioSource.isPlaying()) {
+			if (!this.audioSource.isPlaying()) {
+				this.audioSource.playFrom(frame.timestamp);
+			} else {
+				long audioTs = this.audioSource.getEstimatedPlaybackTimestamp();
+				if (audioTs > 0 && Math.abs(frame.timestamp - audioTs) > AUDIO_SYNC_THRESHOLD) {
 					this.audioSource.playFrom(frame.timestamp);
-				} else {
-					long audioTs = this.audioSource.getEstimatedPlaybackTimestamp();
-					if (audioTs > 0 && Math.abs(frame.timestamp - audioTs) > AUDIO_SYNC_THRESHOLD) {
-						this.audioSource.playFrom(frame.timestamp);
-					}
 				}
 			}
 			this.profiler.pop();
@@ -485,7 +465,7 @@ public class DisplayLayerHls extends DisplayLayerSimple {
         this.profiler.startTick();
         this.profiler.push("tick");
 		
-        if (this.externalPaused || !this.audioInRange) {
+        if (this.externalPaused) {
             if (this.audioSource.isPlaying()) {
                 this.audioSource.stop();
             }

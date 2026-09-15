@@ -219,10 +219,11 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
         if (uri != null) {
             try {
                 BlockPos pos = entity.getPos();
+                float renderDistance = entity.getRenderDistance();
                 float audioDistance = entity.getAudioDistance();
                 int playerDist = pos.getManhattanDistance(this.gameRenderer.getCamera().getBlockPos());
 
-                boolean inRange = !(audioDistance > 0f && playerDist > audioDistance);
+                boolean inRange = !(renderDistance > 0f && playerDist > renderDistance);
 
                 if (entity.getWorld() != null && DisplayNetworking.shouldSendPlaybackRangeUpdate(entity.getWorld().getRegistryKey(), pos, inRange, entity.isPlaybackPaused())) {
                     DisplayNetworking.sendPlaybackState(entity, inRange);

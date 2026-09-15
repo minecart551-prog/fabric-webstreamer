@@ -123,7 +123,17 @@ public class AudioStreamingSource {
 			return; // Never initialized, nothing to stop
 		}
 		this.checkValid();
+		// Fully release the OpenAL source instead of only calling alSourceStop().
+		// Deleting the source guarantees that no stale buffer remains queued on
+		// it, so the next playFrom() lazily creates a brand-new source and starts
+		// from a totally clean state (e.g. after walking out of and back into
+		// audio range). Otherwise OpenAL would resume from the pre-stop buffers,
+		// producing a burst of old audio or choppy/absent playback until a fresh
+		// source is used.
 		alSourceStop(this.sourceId);
+		alDeleteSources(this.sourceId);
+		this.sourceId = 0;
+		this.initFailed = false;
 		this.queue.forEach(AudioStreamingBuffer::free);
 		this.queue.clear();
 		this.timestampOffsetInitialized = false;

@@ -172,14 +172,13 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         if (this.destroyed) {
             return;
         }
+        // Out of range audio is muted, not stopped, so that the audio pipeline
+        // keeps streaming continuously and re-entering the range doesn't require
+        // a costly/glitchy rebuild of the OpenAL source.
         this.audioInRange = audioDistance > 0f && dist <= audioDistance;
-        if (!this.audioInRange) {
-            this.audioSource.stop();
-            return;
-        }
         this.audioSource.setPosition(pos);
         this.audioSource.setAttenuation(audioDistance);
-        this.audioSource.setVolume(audioVolume);
+        this.audioSource.setVolume(this.audioInRange ? audioVolume : 0f);
     }
 
     // -------------------------------------------------------------------------
@@ -562,7 +561,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
         long now = System.nanoTime();
 
-        boolean shouldPause = !this.audioInRange || this.externalPaused;
+        boolean shouldPause = this.externalPaused;
         if (this.lastTickNanos > 0 && !shouldPause) {
             this.playbackMicros += (now - this.lastTickNanos) / 1000L;
         }
@@ -591,9 +590,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             } else if (this.paused) {
                 this.paused = false;
                 this.playbackMicros = this.pausedPlaybackMicros;
-                if (this.audioInRange) {
-                    this.audioSource.playFromTimestamp(this.refTimestamp + this.playbackMicros);
-                }
+                this.audioSource.playFromTimestamp(this.refTimestamp + this.playbackMicros);
             }
 
             int audioBuffersQueued = 0;
@@ -637,9 +634,8 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 }
             }
 
-            if (audioBuffersQueued > 0 || framesDisplayed > 0) {
-                long currentTimestamp = this.refTimestamp + this.playbackMicros;
-                this.audioSource.playFrom(currentTimestamp);
+            if (audioBuffersQueued > 0) {
+                this.audioSource.playFrom(this.refTimestamp + this.playbackMicros);
             }
 
             if (this.decodeFinished) {

@@ -66,6 +66,7 @@ public class DisplayBlockEntity extends BlockEntity {
     private float height = 1;
     private float audioDistance = 10f;
     private float audioVolume = 1f;
+    private float renderDistance = 64f;
     private double offsetX = 0.0;
     private double offsetY = 0.0;
     private double offsetZ = 0.0;
@@ -127,7 +128,7 @@ public class DisplayBlockEntity extends BlockEntity {
     }
 
     public void setAudioConfig(float distance, float volume) {
-        this.audioDistance = distance;
+        this.audioDistance = Math.min(distance, this.renderDistance);
         this.audioVolume = volume;
         this.markDirty();
     }
@@ -138,6 +139,16 @@ public class DisplayBlockEntity extends BlockEntity {
 
     public float getAudioVolume() {
         return audioVolume;
+    }
+
+    public void setRenderDistance(float renderDistance) {
+        this.renderDistance = renderDistance;
+        this.audioDistance = Math.min(this.audioDistance, this.renderDistance);
+        this.markDirty();
+    }
+
+    public float getRenderDistance() {
+        return renderDistance;
     }
 
     public void setOffset(double offsetX, double offsetY, double offsetZ) {
@@ -212,6 +223,7 @@ public class DisplayBlockEntity extends BlockEntity {
         displayNbt.putFloat("height", this.height);
         displayNbt.putFloat("audioDistance", this.audioDistance);
         displayNbt.putFloat("audioVolume", this.audioVolume);
+        displayNbt.putFloat("renderDistance", this.renderDistance);
         displayNbt.putDouble("offsetX", this.offsetX);
         displayNbt.putDouble("offsetY", this.offsetY);
         displayNbt.putDouble("offsetZ", this.offsetZ);
@@ -260,6 +272,15 @@ public class DisplayBlockEntity extends BlockEntity {
             } else {
                 this.audioVolume = 1f;
             }
+
+            if (displayNbt.get("renderDistance") instanceof NbtFloat renderDistance) {
+                this.renderDistance = renderDistance.floatValue();
+            } else {
+                this.renderDistance = 64f;
+            }
+
+            // Clamp audioDistance to renderDistance so audio never exceeds view range.
+            this.audioDistance = Math.min(this.audioDistance, this.renderDistance);
 
             if (displayNbt.get("offsetX") instanceof NbtDouble offsetX) {
                 this.offsetX = offsetX.doubleValue();
@@ -320,16 +341,18 @@ public class DisplayBlockEntity extends BlockEntity {
 
         }
 
-        // Validate audio distance based on block type to prevent loading invalid values from old NBT data
+        // Validate render distance and audio distance based on block type
         if (this.getCachedState().getBlock() instanceof WebDisplayPBlock || 
             this.getCachedState().getBlock() instanceof TVBlock || 
             this.getCachedState().getBlock() instanceof BigTVBlock) {
-            // TV blocks have a maximum audio distance of 64 blocks
-            this.audioDistance = Math.min(this.audioDistance, 64f);
+            // TV blocks have a maximum render distance of 64 blocks
+            this.renderDistance = Math.min(this.renderDistance, 64f);
         } else if (this.getCachedState().getBlock() instanceof DisplayBlock) {
-            // Base display blocks have a maximum audio distance of 512 blocks
-            this.audioDistance = Math.min(this.audioDistance, 512f);
+            // Base display blocks have a maximum render distance of 512 blocks
+            this.renderDistance = Math.min(this.renderDistance, 512f);
         }
+        // Always clamp audio distance to render distance
+        this.audioDistance = Math.min(this.audioDistance, this.renderDistance);
 
     }
 

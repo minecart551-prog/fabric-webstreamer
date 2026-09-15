@@ -61,6 +61,7 @@ public class DisplayBlockScreen extends Screen {
     private static final Text QUALITY_TEXT = Text.translatable("gui.webstreamer.display.quality");
     private static final String AUDIO_DISTANCE_TEXT_KEY = "gui.webstreamer.display.audioDistance";
     private static final String AUDIO_VOLUME_TEXT_KEY = "gui.webstreamer.display.audioVolume";
+    private static final String RENDER_DISTANCE_TEXT_KEY = "gui.webstreamer.display.renderDistance";
 
     private static final Text ERR_PENDING = Text.translatable("gui.webstreamer.display.error.pending");
     private static final Text ERR_INVALID_SIZE = Text.translatable("gui.webstreamer.display.error.invalidSize");
@@ -93,6 +94,7 @@ public class DisplayBlockScreen extends Screen {
 
     private TextFieldWidget widthField, heightField, offsetXField, offsetYField, offsetZField;
     private RotationSliderWidget rotationXSlider, rotationYSlider, rotationZSlider;
+    private AudioDistanceSliderWidget renderDistanceSlider;
     private AudioDistanceSliderWidget audioDistanceSlider;
     private AudioVolumeSliderWidget audioVolumeSlider;
     private ButtonWidget sourceTypeButton;
@@ -283,20 +285,32 @@ public class DisplayBlockScreen extends Screen {
         }).dimensions(xHalf + 136, yTop + 10, 76, 20).build();
         this.addDrawableChild(sourceTypeButton);
 
-        float audioDistanceVal = audioDistanceSlider == null ? this.display.getAudioDistance() : audioDistanceSlider.getDistance();
         boolean isBaseDisplay = this.display.getCachedState().getBlock() instanceof DisplayBlock && !(this.display.getCachedState().getBlock() instanceof WebDisplayPBlock)&& !(this.display.getCachedState().getBlock() instanceof TVBlock)&& !(this.display.getCachedState().getBlock() instanceof BigTVBlock);
-        float maxAudioDistance = isBaseDisplay ? 512f : 64f;
+        float maxRenderDistance = isBaseDisplay ? 512f : 64f;
+
+        float renderDistanceVal = renderDistanceSlider == null ? this.display.getRenderDistance() : renderDistanceSlider.getDistance();
         int audioRowY = yTop + 36 + rotationRowHeight;
-        audioDistanceSlider = new AudioDistanceSliderWidget(xHalf - 154, audioRowY, 150, 20, audioDistanceVal, maxAudioDistance);
+        renderDistanceSlider = new AudioDistanceSliderWidget(xHalf - 154, audioRowY, 150, 20, renderDistanceVal, maxRenderDistance, RENDER_DISTANCE_TEXT_KEY);
+        renderDistanceSlider.setChangedListener(val -> {
+            if (audioDistanceSlider != null) {
+                audioDistanceSlider.setMaxDistance(val);
+            }
+            this.dirty = true;
+        });
+        this.addDrawableChild(renderDistanceSlider);
+
+        float audioDistanceVal = audioDistanceSlider == null ? this.display.getAudioDistance() : audioDistanceSlider.getDistance();
+        audioDistanceSlider = new AudioDistanceSliderWidget(xHalf + 4, audioRowY, 150, 20, audioDistanceVal, renderDistanceVal, AUDIO_DISTANCE_TEXT_KEY);
         audioDistanceSlider.setChangedListener(val -> this.dirty = true);
         this.addDrawableChild(audioDistanceSlider);
 
         float audioVolumeVal = audioVolumeSlider == null ? this.display.getAudioVolume() : audioVolumeSlider.getVolume();
-        audioVolumeSlider = new AudioVolumeSliderWidget(xHalf + 4, audioRowY, 150, 20, audioVolumeVal);
+        int audioVolumeRowY = audioRowY + 24;
+        audioVolumeSlider = new AudioVolumeSliderWidget(xHalf - 154, audioVolumeRowY, 150, 20, audioVolumeVal);
         audioVolumeSlider.setChangedListener(val -> this.dirty = true);
         this.addDrawableChild(audioVolumeSlider);
 
-        int ySourceTop = yTop + 60 + rotationRowHeight;
+        int ySourceTop = yTop + 60 + rotationRowHeight + 24;
         int ySourceBottom = ySourceTop;
 
         if (sourceType == SourceType.RAW) {
@@ -866,8 +880,9 @@ public class DisplayBlockScreen extends Screen {
 
             float audioDistance = this.audioDistanceSlider.getDistance();
             float audioVolume = this.audioVolumeSlider.getVolume();
-            boolean isBaseDisplay = this.display.getCachedState().getBlock() instanceof DisplayBlock && !(this.display.getCachedState().getBlock() instanceof WebDisplayPBlock);
-            audioDistance = Math.min(audioDistance, isBaseDisplay ? 512f : 64f);
+            float renderDistance = this.renderDistanceSlider.getDistance();
+            audioDistance = Math.min(audioDistance, renderDistance);
+            this.display.setRenderDistance(renderDistance);
             this.display.setAudioConfig(audioDistance, audioVolume);
 
             float rotX = this.fixedScaleOffset ? 0f : this.rotationXSlider.getRotation();
@@ -1212,17 +1227,26 @@ public class DisplayBlockScreen extends Screen {
      */
     private static class AudioDistanceSliderWidget extends SliderWidget {
 
-        private final float maxDistance;
+        private float maxDistance;
         private Consumer<Float> changedListener;
+        private String labelKey;
 
-        public AudioDistanceSliderWidget(int x, int y, int width, int height, float distance, float maxDistance) {
-            super(x, y, width, height, Text.empty(), distance / maxDistance);
+        public AudioDistanceSliderWidget(int x, int y, int width, int height, float distance, float maxDistance, String labelKey) {
+            super(x, y, width, height, Text.empty(), maxDistance > 0 ? distance / maxDistance : 0);
             this.maxDistance = maxDistance;
+            this.labelKey = labelKey;
             this.updateMessage();
         }
 
         public void setChangedListener(Consumer<Float> changedListener) {
             this.changedListener = changedListener;
+        }
+
+        public void setMaxDistance(float newMax) {
+            float distance = getDistance();
+            this.maxDistance = newMax;
+            this.value = newMax > 0 ? Math.min(distance, newMax) / newMax : 0;
+            this.updateMessage();
         }
 
         public float getDistance() {
@@ -1231,7 +1255,7 @@ public class DisplayBlockScreen extends Screen {
 
         @Override
         protected void updateMessage() {
-            this.setMessage(Text.translatable(AUDIO_DISTANCE_TEXT_KEY).append(": ").append(Integer.toString((int) this.getDistance())));
+            this.setMessage(Text.translatable(this.labelKey).append(": ").append(Integer.toString((int) this.getDistance())));
         }
 
         @Override
