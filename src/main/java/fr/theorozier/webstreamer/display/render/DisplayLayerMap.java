@@ -148,6 +148,17 @@ public abstract class DisplayLayerMap<K> implements DisplayLayerNode {
             return null;
         }
         if (layer == null) {
+            // A layer for the same display may already be decoding the requested
+            // content under a stale key (e.g. a playlist advanced and the layer
+            // re-started internally before the renderer noticed the URI change).
+            // Re-key it instead of tearing it down and rebuilding a fresh layer,
+            // which would reset the stream and drop its audio in the middle of a
+            // transition. Subclasses opt in via {@link #tryRekeyLayer}.
+            if (this.tryRekeyLayer(key)) {
+                layer = this.layers.get(layerKey);
+            }
+        }
+        if (layer == null) {
             if (this.isLayerCreationBlocked(key)) {
                 return null;
             }
@@ -177,6 +188,46 @@ public abstract class DisplayLayerMap<K> implements DisplayLayerNode {
     private void removeLayer(K key, DisplayLayerNode layer) {
         this.layers.remove(key);
         this.currentCost -= layer.cost();
+    }
+
+    /**
+     * Opportunity for subclasses to re-key an existing layer that is already
+     * decoding the requested content (e.g. a playlist advanced and the layer
+     * re-started internally before the renderer noticed the URI change), so the
+     * entry can be found under {@code key} instead of being torn down and
+     * rebuilt.
+     *
+     * @param key The key being requested by the renderer.
+     * @return true if the layer cache was updated to use {@code key}.
+     */
+    protected boolean tryRekeyLayer(Key key) {
+        return false;
+    }
+
+    /**
+     * Move an existing layer entry from its current key to {@code newKey} when
+     * {@code predicate} matches its current key/node. The layer cost is
+     * unchanged (the same node is stored once), so {@code currentCost} is not
+     * touched.
+     *
+     * @param newKey The key the matching layer should be stored under.
+     * @param predicate Tests the existing {@code (key, node)} pairs.
+     * @return true if an entry was re-keyed.
+     */
+    protected boolean rekeyLayer(Key newKey, java.util.function.BiPredicate<K, DisplayLayerNode> predicate) {
+        Iterator<Map.Entry<K, DisplayLayerNode>> it = this.layers.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<K, DisplayLayerNode> entry = it.next();
+            if (entry.getKey().equals(this.getLayerKey(newKey))) {
+                continue;
+            }
+            if (predicate.test(entry.getKey(), entry.getValue())) {
+                it.remove();
+                this.layers.put(this.getLayerKey(newKey), entry.getValue());
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

@@ -73,6 +73,26 @@ public class DisplayLayerManager extends DisplayLayerMap<DisplayLayerNode.Key> {
     }
 
     @Override
+    protected boolean tryRekeyLayer(Key key) {
+        if (key.uri() == null) {
+            return false;
+        }
+        // When a playlist advances, the display source's URI changes to the next
+        // video. The layer itself may already have re-started on that exact URI
+        // (tryRestartNextVideo) before the renderer resolves it; in that case the
+        // running layer must be kept and re-keyed, not torn down and rebuilt —
+        // a rebuild would reopen FFmpeg from scratch, dropping the buffered
+        // audio and leaving the fresh layer unpositioned until it is rendered
+        // again (inaudible while the player looks away).
+        return this.rekeyLayer(key, (existingKey, node) ->
+                existingKey.display() == key.display()
+                && !existingKey.uri().equals(key.uri())
+                && node instanceof DisplayLayerVideo video
+                && key.uri().equals(video.getCurrentUri())
+                && !video.isDestroyed());
+    }
+
+    @Override
     @NotNull
     protected DisplayLayerNode getNewLayer(Key key) throws OutOfLayerException, UnknownFormatException {
 

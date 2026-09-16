@@ -37,6 +37,12 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     private static final int MAX_FAILED_GRABS = 5;
     private static final int FRAME_BUFFER_POOL_SIZE = 24;
     private static final int FRAME_BUFFER_SIZE = 1 * 1024 * 1024;
+    /** Cooldown before an automatic restart attempt after a grabber failure. */
+    private static final long RESTART_RETRY_INTERVAL_NS = 2L * 1_000_000_000L;
+    /** Bounded automatic restart attempts, so a transient failure while the
+     * display is off-screen self-heals instead of staying silent until the
+     * renderer rebuilds the layer (which only happens when someone looks back). */
+    private static final int MAX_RESTART_RETRIES = 3;
     private static final String USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
             "AppleWebKit/537.36 (KHTML, like Gecko) " +
@@ -47,6 +53,8 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     private volatile boolean grabberReady   = false;
     private boolean grabberFailed  = false;
     private boolean grabberFailureLogged = false;
+    private long lastRestartAttemptNanos = 0;
+    private int restartAttempts = 0;
     private int failedGrabs = 0;
     private long refTimestamp = -1;
 
@@ -115,11 +123,34 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         this.display = key.display();
         this.currentUri = key.uri();
         this.audioSource = new AudioStreamingSource(this.makeLog("audio"));
+        // Default the audio source to this display's own location. A layer that
+        // is (re)created around a playlist transition can start decoding and
+        // queue audio before the renderer ever calls pushAudioSource() (it only
+        // runs from render() while the display is being rendered, e.g. the
+        // player turned away as the playlist advanced and the layer was
+        // re-keyed on the new URI). Without these defaults the fresh source
+        // sits at the world origin — distance-attenuated to silence until the
+        // player happens to look back and pushAudioSource() re-positions it.
+        if (this.display != null) {
+            this.audioSource.setPosition(this.display.getPos());
+            this.audioSource.setAttenuation(this.display.getAudioDistance());
+            this.audioSource.setVolume(this.display.getAudioVolume());
+        }
     }
 
     @Override
     public int cost() {
         return 30;
+    }
+
+    /**
+     * The URI this layer is currently decoding, updated by
+     * {@link #tryRestartNextVideo()} when a playlist advances. Used by the layer
+     * manager to re-key the layer to the display's resolved URI instead of
+     * rebuilding it mid-transition.
+     */
+    public URI getCurrentUri() {
+        return this.currentUri;
     }
 
     @Override
@@ -261,6 +292,9 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
             this.grabberReady   = true;
             this.grabberPending = false;
+            this.failedGrabs = 0;
+            this.restartAttempts = 0;
+            this.lastRestartAttemptNanos = 0;
 
             // Pre-fetch the next video's playlist so it's cached when this video ends.
             // This must run AFTER grabberReady is set so tryRestartNextVideo() can
@@ -354,6 +388,15 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         int channels = frame.audioChannels;
         int sampleRate = frame.sampleRate;
         long timestamp = frame.timestamp;
+
+        // A single malformed audio frame must not kill the whole stream: the
+        // decode-thread catch would otherwise mark the layer as permanently
+        // failed (grabberFailed), silencing it until the renderer rebuilds the
+        // layer on the next look. Transient bad frames (e.g. at a video
+        // transition, or on stream hiccups) should just be skipped.
+        if (raw == null || channels <= 0 || sampleRate <= 0) {
+            return;
+        }
 
         int samples;
         short[] pcm;
@@ -544,6 +587,25 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 this.grabberFailureLogged = true;
             }
             this.audioSource.stop();
+            // Bounded auto-restart: a transient failure (e.g. while the next
+            // playlist video starts and the display is off-screen, so the
+            // renderer is not keeping the layer alive) must not leave the
+            // display permanently silent until someone looks back at it — the
+            // renderer only rebuilds the layer once it is rendered again.
+            if (this.restartAttempts < MAX_RESTART_RETRIES
+                    && System.nanoTime() - this.lastRestartAttemptNanos >= RESTART_RETRY_INTERVAL_NS) {
+                this.lastRestartAttemptNanos = System.nanoTime();
+                this.restartAttempts++;
+                WebStreamerConfig.debugLog(makeLog("Auto-retrying stream after grabber failure (attempt {}/{})."),
+                        this.restartAttempts, MAX_RESTART_RETRIES);
+                this.grabberFailed = false;
+                this.grabberFailureLogged = false;
+                this.failedGrabs = 0;
+                this.stopGrabber();
+                this.grabberReady = false;
+                this.grabberPending = false;
+                this.decodeFinished = false;
+            }
             return;
         }
 
@@ -598,19 +660,28 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             int audioBuffersQueued = 0;
             int framesDisplayed = 0;
 
-            ShortBuffer audioDataShort = this.tempAudioByteBuf.asShortBuffer();
-            RawAudioChunk chunk;
-            while ((chunk = this.pendingAudioChunks.poll()) != null) {
-                audioDataShort.clear();
-                audioDataShort.put(chunk.pcm);
-                audioDataShort.flip();
-                AudioStreamingBuffer audioBuf = AudioStreamingBuffer.fromRawData(
-                        this.tempAudioBuffer, audioDataShort,
-                        1, chunk.sampleRate, chunk.timestamp);
-                if (audioBuf != null) {
-                    this.audioSource.queueBuffer(audioBuf);
-                    audioBuffersQueued++;
+            // Audio processing is independent from frame grabbing: a transient
+            // audio error must not count as a failed grab and eventually mark
+            // the layer as lost. Log and keep going, so a hiccup during the
+            // next-video restart while the display is off-screen doesn't leave
+            // it silent until the renderer rebuilds the layer.
+            try {
+                ShortBuffer audioDataShort = this.tempAudioByteBuf.asShortBuffer();
+                RawAudioChunk chunk;
+                while ((chunk = this.pendingAudioChunks.poll()) != null) {
+                    audioDataShort.clear();
+                    audioDataShort.put(chunk.pcm);
+                    audioDataShort.flip();
+                    AudioStreamingBuffer audioBuf = AudioStreamingBuffer.fromRawData(
+                            this.tempAudioBuffer, audioDataShort,
+                            1, chunk.sampleRate, chunk.timestamp);
+                    if (audioBuf != null) {
+                        this.audioSource.queueBuffer(audioBuf);
+                        audioBuffersQueued++;
+                    }
                 }
+            } catch (Exception e) {
+                WebStreamerConfig.debugLog(makeLog("Audio drain failed: {}"), e.getMessage());
             }
 
             PooledVideoFrame pvf;
@@ -643,17 +714,23 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             }
 
             if (this.decodeFinished) {
-                while ((chunk = this.pendingAudioChunks.poll()) != null) {
-                    audioDataShort.clear();
-                    audioDataShort.put(chunk.pcm);
-                    audioDataShort.flip();
-                    AudioStreamingBuffer audioBuf = AudioStreamingBuffer.fromRawData(
-                            this.tempAudioBuffer, audioDataShort,
-                            1, chunk.sampleRate, chunk.timestamp);
-                    if (audioBuf != null) {
-                        this.audioSource.queueBuffer(audioBuf);
-                        audioBuffersQueued++;
+                try {
+                    RawAudioChunk chunk;
+                    while ((chunk = this.pendingAudioChunks.poll()) != null) {
+                        ShortBuffer audioDataShort = this.tempAudioByteBuf.asShortBuffer();
+                        audioDataShort.clear();
+                        audioDataShort.put(chunk.pcm);
+                        audioDataShort.flip();
+                        AudioStreamingBuffer audioBuf = AudioStreamingBuffer.fromRawData(
+                                this.tempAudioBuffer, audioDataShort,
+                                1, chunk.sampleRate, chunk.timestamp);
+                        if (audioBuf != null) {
+                            this.audioSource.queueBuffer(audioBuf);
+                            audioBuffersQueued++;
+                        }
                     }
+                } catch (Exception e) {
+                    WebStreamerConfig.debugLog(makeLog("Audio drain failed at end of stream: {}"), e.getMessage());
                 }
                 if (audioBuffersQueued > 0) {
                     this.audioSource.playFrom(this.refTimestamp + this.playbackMicros);

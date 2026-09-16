@@ -33,6 +33,19 @@ public class AudioStreamingSource {
 	private ArrayDeque<AudioStreamingBuffer> queue = new ArrayDeque<>();
 	private long lastBufferTimestamp;
 
+	/** Last desired gain, cached so a re-created source (after {@link #stop()},
+	 * e.g. playlists advancing to the next video) restores the same volume instead
+	 * of falling back to the OpenAL default. Otherwise a source whose display is
+	 * not currently being rendered would lose its config, because pushAudioSource
+	 * is only called from the renderer while the display is on screen. */
+	private float cachedGain = 1f;
+
+	/** Last attenuation distance (AL_MAX_DISTANCE), cached for source recreation. */
+	private float cachedMaxDistance = 50f;
+
+	/** Last position, cached for source recreation. Null if never set. */
+	private Vec3i cachedPosition = null;
+
 	private boolean timestampOffsetInitialized = false;
 	private long timestampOffset = 0;
 	private static final long TIMESTAMP_REBASE_THRESHOLD = 1000000L;
@@ -66,8 +79,11 @@ public class AudioStreamingSource {
 				this.sourceId = id;
 				alSourcei(this.sourceId, AL_LOOPING, AL_FALSE);
 				alSourcei(this.sourceId, AL_SOURCE_RELATIVE, AL_FALSE);
-				this.setVolume(1f);
-				this.setAttenuation(50f);
+				// Restore the last known audio config. A source re-created after
+				// stop() must keep its position/gain/attenuation even if the
+				// renderer never got to call pushAudioSource again (display
+				// off screen while the next playlist video starts).
+				this.applyCachedConfig();
 				return true;
 			}
 		} catch (ExceptionInInitializerError | IllegalStateException | NoClassDefFoundError e) {
@@ -159,6 +175,7 @@ public class AudioStreamingSource {
 	}
 	
 	public void setPosition(Vec3i pos) {
+		this.cachedPosition = pos;
 		if (!this.ensureInitialized()) {
 			return;
 		}
@@ -166,6 +183,7 @@ public class AudioStreamingSource {
 	}
 	
 	public void setVolume(float volume) {
+		this.cachedGain = volume;
 		if (!this.ensureInitialized()) {
 			return;
 		}
@@ -173,6 +191,7 @@ public class AudioStreamingSource {
 	}
 	
 	public void setAttenuation(float attenuation) {
+		this.cachedMaxDistance = attenuation;
 		if (!this.ensureInitialized()) {
 			return;
 		}
@@ -180,6 +199,22 @@ public class AudioStreamingSource {
 		alSourcef(this.sourceId, AL_MAX_DISTANCE, attenuation);
 		alSourcef(this.sourceId, AL_ROLLOFF_FACTOR, 1.0F);
 		alSourcef(this.sourceId, AL_REFERENCE_DISTANCE, 0.0F);
+	}
+
+	/** Apply the cached gain/attenuation/position to the current source, e.g.
+	 * right after it was created or re-created. */
+	private void applyCachedConfig() {
+		alSourcef(this.sourceId, AL_GAIN, this.cachedGain);
+		alSourcei(this.sourceId, AL_DISTANCE_MODEL, AL_LINEAR_DISTANCE);
+		alSourcef(this.sourceId, AL_MAX_DISTANCE, this.cachedMaxDistance);
+		alSourcef(this.sourceId, AL_ROLLOFF_FACTOR, 1.0F);
+		alSourcef(this.sourceId, AL_REFERENCE_DISTANCE, 0.0F);
+		if (this.cachedPosition != null) {
+			alSourcefv(this.sourceId, AL_POSITION, new float[] {
+					(float) this.cachedPosition.getX() + 0.5f,
+					(float) this.cachedPosition.getY() + 0.5f,
+					(float) this.cachedPosition.getZ() + 0.5f });
+		}
 	}
 	
 	public boolean isPlaying() {
