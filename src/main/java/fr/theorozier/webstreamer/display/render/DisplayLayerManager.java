@@ -66,6 +66,13 @@ public class DisplayLayerManager extends DisplayLayerMap<DisplayLayerNode.Key> {
 
         this.cleanupLayersIf(existingKey -> existingKey.display() == key.display() && !existingKey.uri().equals(key.uri()), 0);
 
+        // Reject URIs without a scheme (e.g. bare local paths like "/x.gif" that
+        // slipped through source resolution) so they can't create a layer that
+        // fails obscurely later on.
+        if (key.uri() == null || key.uri().getScheme() == null) {
+            throw new UnknownFormatException();
+        }
+
         if (this.cost() >= MAX_LAYERS_COST) {
             long now = System.nanoTime();
             if (now - this.lastCostWarning >= COST_WARNING_INTERVAL) {

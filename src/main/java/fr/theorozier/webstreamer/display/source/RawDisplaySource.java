@@ -3,6 +3,7 @@ package fr.theorozier.webstreamer.display.source;
 import fr.theorozier.webstreamer.WebStreamerClientMod;
 import fr.theorozier.webstreamer.WebStreamerMod;
 import fr.theorozier.webstreamer.playlist.Playlist;
+import fr.theorozier.webstreamer.util.WebStreamerConfig;
 import fr.theorozier.webstreamer.youtube.YoutubeClient;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtString;
@@ -133,7 +134,7 @@ public class RawDisplaySource extends DisplaySource {
             }
             // Pick the first (best) quality.
             URI streamUri = playlist.getQualities().get(0).uri();
-            WebStreamerMod.LOGGER.info("Resolved YouTube URL for '{}' → quality '{}'", videoId, playlist.getQualities().get(0).name());
+            WebStreamerConfig.debugLog("Resolved YouTube URL for '{}' → quality '{}'", videoId, playlist.getQualities().get(0).name());
             return streamUri;
         } catch (YoutubeClient.YoutubeException e) {
             WebStreamerMod.LOGGER.warn("Failed to resolve YouTube URL '{}': {}", url, e.getMessage());

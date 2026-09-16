@@ -4,6 +4,7 @@ import fr.theorozier.webstreamer.WebStreamerClientMod;
 import fr.theorozier.webstreamer.WebStreamerMod;
 import fr.theorozier.webstreamer.playlist.Playlist;
 import fr.theorozier.webstreamer.playlist.PlaylistQuality;
+import fr.theorozier.webstreamer.util.WebStreamerConfig;
 import fr.theorozier.webstreamer.youtube.YoutubeClient;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtString;
@@ -213,7 +214,7 @@ public class YoutubeDisplaySource extends DisplaySource {
             nextIndex = (this.currentVideoIndex + 1) % this.videoIds.size();
         }
         String nextId = this.videoIds.get(nextIndex);
-        WebStreamerMod.LOGGER.info("Pre-fetching URI for next video: {} (index {})", nextId, nextIndex);
+        WebStreamerConfig.debugLog("Pre-fetching URI for next video: {} (index {})", nextId, nextIndex);
         Thread prefetch = new Thread(() -> {
             try {
                 Playlist playlist = WebStreamerClientMod.YOUTUBE_CLIENT.requestPlaylist(nextId);
@@ -222,7 +223,7 @@ public class YoutubeDisplaySource extends DisplaySource {
                     this.preparedNextUri = q.uri();
                 }
             } catch (Exception e) {
-                WebStreamerMod.LOGGER.warn("Pre-fetch failed for '{}': {}", nextId, e.getMessage());
+                WebStreamerConfig.debugWarn("Pre-fetch failed for '{}': {}", nextId, e.getMessage());
             }
         }, "yt-prefetch-" + nextId);
         prefetch.setDaemon(true);

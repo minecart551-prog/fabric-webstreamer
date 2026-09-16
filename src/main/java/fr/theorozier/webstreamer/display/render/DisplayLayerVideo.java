@@ -4,6 +4,7 @@ import fr.theorozier.webstreamer.WebStreamerMod;
 import fr.theorozier.webstreamer.display.DisplayBlockEntity;
 import fr.theorozier.webstreamer.display.DisplayNetworking;
 import fr.theorozier.webstreamer.util.FFmpegLibrary;
+import fr.theorozier.webstreamer.util.WebStreamerConfig;
 import fr.theorozier.webstreamer.display.audio.AudioStreamingBuffer;
 import fr.theorozier.webstreamer.display.audio.AudioStreamingSource;
 import fr.theorozier.webstreamer.display.source.ServerDisplaySource;
@@ -207,7 +208,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 this.bufferPool.add(ByteBuffer.allocateDirect(FRAME_BUFFER_SIZE));
             }
 
-            WebStreamerMod.LOGGER.info(makeLog("Opening FFmpeg with URI: {}"), this.currentUri);
+            WebStreamerConfig.debugLog(makeLog("Opening FFmpeg with URI: {}"), this.currentUri);
             FFmpegFrameGrabber fg = new FFmpegFrameGrabber(this.currentUri.toString());
             fg.setOption("user_agent", USER_AGENT);
             fg.setOption("headers", "Referer: https://www.youtube.com/");
@@ -439,8 +440,8 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 return false;
             }
             DisplayNetworking.sendDisplayUpdate(this.display);
-            WebStreamerMod.LOGGER.info(makeLog("Restarting YouTube playlist with next video {}"), youtubeSource.getCurrentVideoId());
-            WebStreamerMod.LOGGER.info(makeLog("Next video URI: {}"), nextUri);
+            WebStreamerConfig.debugLog(makeLog("Restarting YouTube playlist with next video {}"), youtubeSource.getCurrentVideoId());
+            WebStreamerConfig.debugLog(makeLog("Next video URI: {}"), nextUri);
             this.currentUri = nextUri;
             this.failedGrabs = 0;
             this.refTimestamp = -1;
@@ -474,8 +475,8 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 return false;
             }
             DisplayNetworking.sendDisplayUpdate(this.display);
-            WebStreamerMod.LOGGER.info(makeLog("Restarting server playlist with next video {}"), serverSource.getCurrentVideoId());
-            WebStreamerMod.LOGGER.info(makeLog("Next video URI: {}"), nextUri);
+            WebStreamerConfig.debugLog(makeLog("Restarting server playlist with next video {}"), serverSource.getCurrentVideoId());
+            WebStreamerConfig.debugLog(makeLog("Next video URI: {}"), nextUri);
             this.currentUri = nextUri;
             this.failedGrabs = 0;
             this.refTimestamp = -1;

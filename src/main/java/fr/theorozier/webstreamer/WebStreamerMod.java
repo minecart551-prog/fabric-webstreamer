@@ -5,6 +5,7 @@ import fr.theorozier.webstreamer.display.DisplayBlockEntity;
 import fr.theorozier.webstreamer.display.DisplayNetworking;
 import fr.theorozier.webstreamer.server.ServerSourceRegistry;
 import fr.theorozier.webstreamer.server.WebStreamerCommands;
+import fr.theorozier.webstreamer.util.WebStreamerConfig;
 import fr.theorozier.webstreamer.display.TVBlock;
 import fr.theorozier.webstreamer.display.TVBlockEntity;
 import fr.theorozier.webstreamer.display.BigTVBlock;
@@ -97,6 +98,7 @@ public class WebStreamerMod implements ModInitializer {
         ServerTickEvents.END_SERVER_TICK.register(DisplayNetworking::cleanupPlaybackViewers);
         CommandRegistrationCallback.EVENT.register(WebStreamerCommands::register);
         configDir = FabricLoader.getInstance().getConfigDir();
+        WebStreamerConfig.load(configDir);
         ServerSourceRegistry.load(configDir);
 
         // Restart HTTP server when a server starts (handles singleplayer world re-open)

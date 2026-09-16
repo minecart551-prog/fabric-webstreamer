@@ -3,6 +3,7 @@ package fr.theorozier.webstreamer.server;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import fr.theorozier.webstreamer.WebStreamerMod;
+import fr.theorozier.webstreamer.util.WebStreamerConfig;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -63,6 +64,8 @@ public class WebStreamerHttpServer {
         Files.createDirectories(this.filesDir);
 
         this.server = HttpServer.create(new InetSocketAddress(this.port), 0);
+        // Reflect the actual bound port (in case it was requested as 0 / ephemeral).
+        this.port = this.server.getAddress().getPort();
         this.server.createContext("/", this::handleRequest);
         this.server.setExecutor(Executors.newFixedThreadPool(2));
         this.server.start();
@@ -131,7 +134,7 @@ public class WebStreamerHttpServer {
                 Files.copy(filePath, os);
             }
         } catch (Exception e) {
-            WebStreamerMod.LOGGER.error("[Server] HTTP request failed: {}", e.getMessage());
+            WebStreamerConfig.debugWarn("[Server] HTTP request failed: {}", e.getMessage());
             try {
                 sendError(exchange, 500, "Internal server error");
             } catch (Exception ignored) { }

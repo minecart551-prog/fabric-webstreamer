@@ -5,6 +5,7 @@ import fr.theorozier.webstreamer.WebStreamerMod;
 import fr.theorozier.webstreamer.display.DisplayNetworking;
 import fr.theorozier.webstreamer.playlist.Playlist;
 import fr.theorozier.webstreamer.playlist.PlaylistQuality;
+import fr.theorozier.webstreamer.util.WebStreamerConfig;
 import fr.theorozier.webstreamer.youtube.YoutubeClient;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtString;
@@ -41,6 +42,16 @@ public class ServerDisplaySource extends DisplaySource {
     private boolean shuffle = true;
     private boolean randomStartFrame = true;
     private final Random random = new Random();
+
+    /**
+     * The source URL list last received from the server broadcast. The server
+     * builds new list instances for every broadcast, so identity comparison
+     * detects a fresh broadcast (new server session, or /webstreamer config reload).
+     */
+    private List<String> sourceUrlList = List.of();
+
+    /** The URL picked for this display from the latest broadcast list. */
+    private String pickedUrl;
 
     /**
      * When shuffle is on, {@link #prepareNextVideo()} picks a random next video
@@ -167,7 +178,7 @@ public class ServerDisplaySource extends DisplaySource {
             nextIndex = (this.currentVideoIndex + 1) % this.videoIds.size();
         }
         String nextId = this.videoIds.get(nextIndex);
-        WebStreamerMod.LOGGER.info("Server source pre-fetching URI for next video: {} (index {})", nextId, nextIndex);
+        WebStreamerConfig.debugLog("Server source pre-fetching URI for next video: {} (index {})", nextId, nextIndex);
         Thread prefetch = new Thread(() -> {
             try {
                 Playlist playlist = WebStreamerClientMod.YOUTUBE_CLIENT.requestPlaylist(nextId);
@@ -176,7 +187,7 @@ public class ServerDisplaySource extends DisplaySource {
                     this.preparedNextUri = q.uri();
                 }
             } catch (Exception e) {
-                WebStreamerMod.LOGGER.warn("Server source pre-fetch failed for '{}': {}", nextId, e.getMessage());
+                WebStreamerConfig.debugWarn("Server source pre-fetch failed for '{}': {}", nextId, e.getMessage());
             }
         }, "srv-prefetch-" + nextId);
         prefetch.setDaemon(true);
@@ -206,16 +217,30 @@ public class ServerDisplaySource extends DisplaySource {
         if (this.sourceName == null || this.sourceName.isEmpty()) {
             return null;
         }
-        String url = DisplayNetworking.resolveServerSource(this.sourceName);
-        if (url == null) {
+
+        List<String> urls = DisplayNetworking.resolveServerSource(this.sourceName);
+        if (urls == null) {
+            // The server broadcasts the sources on join/reload; nothing to resolve yet.
             return null;
         }
 
-        // If the URL changed, invalidate cached resolution.
-        if (!url.equals(this.lastResolvedUrl)) {
+        // Re-pick a random URL on every fresh broadcast so that each display
+        // independently chooses one source from the list, re-randomized per
+        // server session.
+        if (urls != this.sourceUrlList) {
+            this.sourceUrlList = urls;
             this.resolvedUri = null;
             this.videoIds = null;
-            this.lastResolvedUrl = url;
+            this.pickedUrl = urls.isEmpty() ? null : urls.get(this.random.nextInt(urls.size()));
+            this.lastResolvedUrl = this.pickedUrl;
+            if (this.pickedUrl != null) {
+                WebStreamerMod.LOGGER.debug("Server source '{}' picked '{}'", this.sourceName, this.pickedUrl);
+            }
+        }
+
+        String url = this.pickedUrl;
+        if (url == null) {
+            return null;
         }
 
         // If already resolved, return cached result.
@@ -235,7 +260,13 @@ public class ServerDisplaySource extends DisplaySource {
         }
 
         try {
-            return URI.create(url);
+            URI uri = URI.create(url);
+            if (uri.getScheme() == null) {
+                // Defensive: never pass a scheme-less URI down to the render layers.
+                WebStreamerMod.LOGGER.warn("Server source '{}' produced a scheme-less URL '{}', ignoring", this.sourceName, url);
+                return null;
+            }
+            return uri;
         } catch (IllegalArgumentException e) {
             return null;
         }
@@ -262,7 +293,7 @@ public class ServerDisplaySource extends DisplaySource {
                 return null;
             }
             this.resolvedUri = playlist.getQualities().get(0).uri();
-            WebStreamerMod.LOGGER.info("Resolved server playlist '{}' → video '{}' quality '{}'",
+            WebStreamerConfig.debugLog("Resolved server playlist '{}' → video '{}' quality '{}'",
                     url, videoId, playlist.getQualities().get(0).name());
             return this.resolvedUri;
         } catch (YoutubeClient.YoutubeException e) {
@@ -351,7 +382,7 @@ public class ServerDisplaySource extends DisplaySource {
                 return null;
             }
             URI streamUri = playlist.getQualities().get(0).uri();
-            WebStreamerMod.LOGGER.info("Resolved YouTube URL for '{}' → quality '{}'", videoId, playlist.getQualities().get(0).name());
+            WebStreamerConfig.debugLog("Resolved YouTube URL for '{}' → quality '{}'", videoId, playlist.getQualities().get(0).name());
             return streamUri;
         } catch (YoutubeClient.YoutubeException e) {
             WebStreamerMod.LOGGER.warn("Failed to resolve YouTube URL '{}': {}", url, e.getMessage());

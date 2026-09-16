@@ -16,18 +16,17 @@ import java.util.Properties;
 /**
  * Server-side registry that loads named display sources from
  * {@code config/webstreamer/sources.txt}. Each line maps a name to one or more
- * comma-separated URLs: {@code name:url1,url2,url3}. On load/reload, one URL
- * is randomly selected per source.
+ * comma-separated URLs: {@code name:url1,url2,url3}. The full URL list per
+ * source is broadcast to clients, which pick one randomly per display.
  *
  * <p>Local paths (starting with {@code /}) are auto-detected and resolved
  * to HTTP URLs served by the embedded {@link WebStreamerHttpServer}.</p>
  */
 public class ServerSourceRegistry {
 
-    private static final String FILE_HEADER = "# WebStreamer server sources — one entry per line, format: name:URL\n# Multiple URLs can be comma-separated; one is picked randomly per restart/reload.\n# Local paths starting with / are served from the files/ directory.";
+    private static final String FILE_HEADER = "# WebStreamer server sources — one entry per line, format: name:URL\n# Multiple URLs can be comma-separated; each display randomly picks one of them,\n# re-randomized on every server restart/reload.\n# Local paths starting with / are served from the files/ directory.";
 
     private static Map<String, List<String>> sources = Collections.emptyMap();
-    private static Map<String, String> selectedSources = Collections.emptyMap();
     private static WebStreamerHttpServer httpServer;
     private static String serverIp = "localhost";
 
@@ -85,12 +84,20 @@ public class ServerSourceRegistry {
             }
         }
 
-        loadSources(file);
         startHttpServer(filesDir, httpPort);
+
+        // Apply the configured HTTP IP (if any) so local paths get the correct
+        // host in their resolved HTTP URLs.
+        String configuredIp = readHttpIp(configDir);
+        if (configuredIp != null && !configuredIp.isEmpty()) {
+            setServerIp(configuredIp);
+        }
+
+        loadSources(file);
     }
 
     /**
-     * Re-read sources.txt, pick new random URLs, and resolve them.
+     * Re-read sources.txt.
      * Returns the number of sources loaded, or -1 on error.
      */
     public static int reload() {
@@ -105,7 +112,7 @@ public class ServerSourceRegistry {
             return -1;
         }
         loadSources(file);
-        return selectedSources.size();
+        return sources.size();
     }
 
     private static void loadSources(Path file) {
@@ -152,25 +159,10 @@ public class ServerSourceRegistry {
 
         sources = Collections.unmodifiableMap(loaded);
 
-        // Pick one random URL per source and resolve local paths to HTTP URLs
-        HashMap<String, String> selected = new HashMap<>();
-        Random rng = new Random();
-        for (Map.Entry<String, List<String>> entry : loaded.entrySet()) {
-            String name = entry.getKey();
-            List<String> urls = entry.getValue();
-            String picked = urls.get(rng.nextInt(urls.size()));
-            // Resolve local paths to HTTP URLs
-            if (picked.startsWith("/")) {
-                if (httpServer != null && httpServer.isRunning()) {
-                    picked = "http://" + serverIp + ":" + httpServer.getPort() + picked;
-                } else {
-                    WebStreamerMod.LOGGER.warn("[Server] Source '{}' has local path '{}' but HTTP server is not running", name, entry.getValue().get(0));
-                }
-            }
-            selected.put(name, picked);
-        }
-        selectedSources = Collections.unmodifiableMap(selected);
-        WebStreamerMod.LOGGER.info("[Server] Loaded {} server source(s) from {}", selectedSources.size(), file);
+        // URLs are resolved at broadcast time (see resolveList()); no random
+        // single-pick happens server-side anymore — each display picks its own
+        // URL from the list on the client.
+        WebStreamerMod.LOGGER.info("[Server] Loaded {} server source(s) from {}", sources.size(), file);
     }
 
     /**
@@ -180,11 +172,38 @@ public class ServerSourceRegistry {
         if (httpServer != null && httpServer.isRunning()) {
             return;
         }
+        // Retry the configured port briefly to ride out TIME_WAIT sockets or a
+        // slowly exiting previous instance. Without this, a freshly-reopened
+        // world in singleplayer could hit "Address already in use".
+        Throwable lastError = null;
+        for (int attempt = 0; attempt < 5; attempt++) {
+            try {
+                WebStreamerHttpServer candidate = new WebStreamerHttpServer(filesDir, port);
+                candidate.start();
+                httpServer = candidate;
+                return;
+            } catch (IOException e) {
+                lastError = e;
+                if (attempt < 4) {
+                    try {
+                        Thread.sleep(250);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }
+        }
+        // The configured port is genuinely busy; fall back to an ephemeral port
+        // so local sources still resolve and play. All URLs are built from the
+        // actual bound port (see resolveUrl), so this is transparent.
         try {
-            httpServer = new WebStreamerHttpServer(filesDir, port);
-            httpServer.start();
+            WebStreamerHttpServer fallback = new WebStreamerHttpServer(filesDir, 0);
+            fallback.start();
+            httpServer = fallback;
+            WebStreamerMod.LOGGER.warn("[Server] Port {} is unavailable ({}); WebStreamer HTTP server bound to ephemeral port {}", port, lastError == null ? "unknown error" : lastError.getMessage(), fallback.getPort());
         } catch (IOException e) {
-            WebStreamerMod.LOGGER.error("[Server] Failed to start HTTP server on port {}: {}", port, e.getMessage());
+            WebStreamerMod.LOGGER.error("[Server] Failed to start HTTP server: {}", e.getMessage());
             httpServer = null;
         }
     }
@@ -197,6 +216,18 @@ public class ServerSourceRegistry {
             httpServer.stop();
             httpServer = null;
         }
+    }
+
+    /**
+     * Get the port the embedded HTTP server is bound to (actual bound port,
+     * which may differ from the configured one if it fell back to ephemeral).
+     * Returns {@link WebStreamerHttpServer#DEFAULT_PORT} if the server is down.
+     */
+    public static int getHttpPort() {
+        if (httpServer != null && httpServer.isRunning()) {
+            return httpServer.getPort();
+        }
+        return WebStreamerHttpServer.DEFAULT_PORT;
     }
 
     /**
@@ -256,18 +287,44 @@ public class ServerSourceRegistry {
     }
 
     /**
-     * Resolve a source name to its selected URL. Local paths are converted to HTTP URLs.
-     * @return The URL string, or {@code null} if the name is not registered.
+     * Resolve a source name to its list of URLs. Local paths (starting with {@code /})
+     * are resolved to HTTP URLs served by the embedded {@link WebStreamerHttpServer}.
+     * Entries that cannot be resolved (e.g. a local path while the HTTP server is down)
+     * are skipped, so the returned list never contains a scheme-less URL.
+     *
+     * @return The resolved URL list, or an empty list if the name is not registered.
      */
-    public static String resolve(String name) {
-        return selectedSources.get(name);
+    public static List<String> resolveList(String name) {
+        List<String> raws = sources.get(name);
+        if (raws == null) {
+            return List.of();
+        }
+        List<String> resolved = new ArrayList<>(raws.size());
+        for (String raw : raws) {
+            String url = resolveUrl(raw, name);
+            if (url != null) {
+                resolved.add(url);
+            }
+        }
+        return resolved;
+    }
+
+    private static String resolveUrl(String raw, String name) {
+        if (raw.startsWith("/")) {
+            if (httpServer != null && httpServer.isRunning()) {
+                return "http://" + serverIp + ":" + httpServer.getPort() + raw;
+            }
+            WebStreamerMod.LOGGER.warn("[Server] Source '{}' has local path '{}' but the HTTP server is not running, skipping", name, raw);
+            return null;
+        }
+        return raw;
     }
 
     /**
-     * @return An unmodifiable view of all selected sources (name → resolved URL).
+     * @return An unmodifiable view of all raw sources (name → list of URLs from sources.txt).
      */
-    public static Map<String, String> getAll() {
-        return selectedSources;
+    public static Map<String, List<String>> getAll() {
+        return sources;
     }
 
     /**

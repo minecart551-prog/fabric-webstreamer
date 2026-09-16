@@ -16,6 +16,7 @@ import fr.theorozier.webstreamer.display.source.TwitchDisplaySource;
 import fr.theorozier.webstreamer.display.source.YoutubeDisplaySource;
 import fr.theorozier.webstreamer.playlist.Playlist;
 import fr.theorozier.webstreamer.playlist.PlaylistQuality;
+import fr.theorozier.webstreamer.server.ServerSourceRegistry;
 import fr.theorozier.webstreamer.twitch.TwitchClient;
 import fr.theorozier.webstreamer.youtube.YoutubeClient;
 import fr.theorozier.webstreamer.util.AsyncProcessor;
@@ -481,9 +482,12 @@ public class DisplayBlockScreen extends Screen {
             serverStatusText.alignLeft();
             // Show current resolved status
             if (!serverNameVal.isEmpty()) {
-                String resolved = DisplayNetworking.resolveServerSource(serverNameVal);
-                if (resolved != null) {
-                    serverStatusText.setMessage(Text.literal("Resolved: " + resolved));
+                List<String> resolved = DisplayNetworking.resolveServerSource(serverNameVal);
+                if (resolved != null && !resolved.isEmpty()) {
+                    String text = resolved.size() == 1
+                            ? "Resolved: " + resolved.get(0)
+                            : "Resolved: " + resolved.get(0) + " (+" + (resolved.size() - 1) + " more)";
+                    serverStatusText.setMessage(Text.literal(text));
                     serverStatusText.setTextColor(0x55FF55);
                 } else {
                     serverStatusText.setMessage(Text.literal("Not yet resolved (will resolve at render time)"));
@@ -895,7 +899,8 @@ public class DisplayBlockScreen extends Screen {
                     // Local path with no scheme — prefix with local HTTP server
                     String path = rawUri.getPath();
                     if (path == null || path.isEmpty()) path = "/" + rawUri.toString();
-                    rawUri = URI.create("http://localhost:25600" + (path.startsWith("/") ? path : "/" + path));
+                    int httpPort = ServerSourceRegistry.getHttpPort();
+                    rawUri = URI.create("http://localhost:" + httpPort + (path.startsWith("/") ? path : "/" + path));
                 }
                 this.display.setSource(new RawDisplaySource(rawUri));
             } else if (sourceType == SourceType.TWITCH) {

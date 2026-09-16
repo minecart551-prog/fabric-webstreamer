@@ -8,6 +8,7 @@ import com.google.gson.JsonObject;
 import fr.theorozier.webstreamer.WebStreamerMod;
 import fr.theorozier.webstreamer.playlist.Playlist;
 import fr.theorozier.webstreamer.playlist.PlaylistQuality;
+import fr.theorozier.webstreamer.util.WebStreamerConfig;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 
@@ -397,7 +398,7 @@ public class YoutubeClient {
                     // These are definitive failures, don't try other clients.
                     throw e;
                 }
-                WebStreamerMod.LOGGER.warn("YouTube client {} failed for {}: {}",
+                WebStreamerConfig.debugWarn("YouTube client {} failed for {}: {}",
                         ic.clientName, videoId, e.getMessage());
             }
         }
@@ -431,7 +432,7 @@ public class YoutubeClient {
                 request, HttpResponse.BodyHandlers.ofString());
 
         if (response.statusCode() != 200) {
-            WebStreamerMod.LOGGER.warn("YouTube Android API returned HTTP {} for {}",
+            WebStreamerConfig.debugWarn("YouTube Android API returned HTTP {} for {}",
                     response.statusCode(), videoId);
             throw new YoutubeException(YoutubeExceptionType.FETCH_FAILED);
         }
@@ -452,7 +453,7 @@ public class YoutubeClient {
             }
             if ("LOGIN_REQUIRED".equals(status) || "UNPLAYABLE".equals(status)) {
                 String reason = getString(playabilityStatus, "reason");
-                WebStreamerMod.LOGGER.warn("Video {} unplayable: {}", videoId, reason);
+                WebStreamerConfig.debugWarn("Video {} unplayable: {}", videoId, reason);
                 throw new YoutubeException(YoutubeExceptionType.VIDEO_UNAVAILABLE);
             }
         }
@@ -477,7 +478,7 @@ public class YoutubeClient {
                 .toList();
 
         if (usable.isEmpty()) {
-            WebStreamerMod.LOGGER.warn("No usable progressive streams from Android API for {}", videoId);
+            WebStreamerConfig.debugWarn("No usable progressive streams from Android API for {}", videoId);
             throw new YoutubeException(YoutubeExceptionType.NO_STREAMS);
         }
 

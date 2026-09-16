@@ -21,9 +21,11 @@ import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -45,8 +47,8 @@ public class DisplayNetworking {
 	/** Last time the client sent a playback state packet per display (for the self-heal resync). */
 	private static final Map<PlaybackKey, Long> CLIENT_PLAYBACK_SENT_AT = new HashMap<>();
 
-	/** Client-side cache of server sources (name → URL), populated by server broadcasts. */
-	private static volatile Map<String, String> clientSourceCache = Map.of();
+	/** Client-side cache of server sources (name → URL list), populated by server broadcasts. */
+	private static volatile Map<String, List<String>> clientSourceCache = Map.of();
 
 	private static PacketByteBuf encodeDisplayUpdatePacket(DisplayBlockEntity blockEntity) {
 		PacketByteBuf buf = PacketByteBufs.create();
@@ -92,10 +94,10 @@ public class DisplayNetworking {
      * The cache is populated by {@link #SERVER_SOURCES_BROADCAST_PACKET_ID} packets
      * sent by the server when sources.txt is loaded or reloaded.
      *
-     * @return The resolved URI string, or {@code null} if not found.
+     * @return The resolved URL list for this source, or {@code null} if not found.
      */
     @Environment(EnvType.CLIENT)
-    public static String resolveServerSource(String name) {
+    public static List<String> resolveServerSource(String name) {
         return clientSourceCache.get(name);
     }
 
@@ -107,9 +109,15 @@ public class DisplayNetworking {
     public static void registerSourcesBroadcastReceiver() {
         ClientPlayNetworking.registerGlobalReceiver(SERVER_SOURCES_BROADCAST_PACKET_ID, (client, handler2, buf, responseSender) -> {
             int count = buf.readVarInt();
-            HashMap<String, String> map = new HashMap<>(count);
+            HashMap<String, List<String>> map = new HashMap<>(count);
             for (int i = 0; i < count; i++) {
-                map.put(buf.readString(), buf.readString());
+                String name = buf.readString();
+                int listSize = buf.readVarInt();
+                ArrayList<String> urls = new ArrayList<>(listSize);
+                for (int j = 0; j < listSize; j++) {
+                    urls.add(buf.readString());
+                }
+                map.put(name, urls);
             }
             client.executeSync(() -> {
                 clientSourceCache = Collections.unmodifiableMap(map);
@@ -125,12 +133,16 @@ public class DisplayNetworking {
      * Server-side only, send the full sources map to a single player.
      */
     public static void sendSourcesBroadcast(ServerPlayerEntity player) {
-        Map<String, String> rawSources = ServerSourceRegistry.getAll();
+        Map<String, List<String>> rawSources = ServerSourceRegistry.getAll();
         PacketByteBuf buf = PacketByteBufs.create();
         buf.writeVarInt(rawSources.size());
-        for (Map.Entry<String, String> entry : rawSources.entrySet()) {
-            buf.writeString(entry.getKey());
-            buf.writeString(ServerSourceRegistry.resolve(entry.getKey()));
+        for (String name : rawSources.keySet()) {
+            List<String> urls = ServerSourceRegistry.resolveList(name);
+            buf.writeString(name);
+            buf.writeVarInt(urls.size());
+            for (String url : urls) {
+                buf.writeString(url);
+            }
         }
         ServerPlayNetworking.send(player, SERVER_SOURCES_BROADCAST_PACKET_ID, buf);
     }
@@ -140,12 +152,16 @@ public class DisplayNetworking {
      * Local paths (starting with /) are resolved to HTTP URLs.
      */
     public static void broadcastSourcesToAll(MinecraftServer server) {
-        Map<String, String> rawSources = ServerSourceRegistry.getAll();
+        Map<String, List<String>> rawSources = ServerSourceRegistry.getAll();
         PacketByteBuf buf = PacketByteBufs.create();
         buf.writeVarInt(rawSources.size());
-        for (Map.Entry<String, String> entry : rawSources.entrySet()) {
-            buf.writeString(entry.getKey());
-            buf.writeString(ServerSourceRegistry.resolve(entry.getKey()));
+        for (String name : rawSources.keySet()) {
+            List<String> urls = ServerSourceRegistry.resolveList(name);
+            buf.writeString(name);
+            buf.writeVarInt(urls.size());
+            for (String url : urls) {
+                buf.writeString(url);
+            }
         }
         for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
             ServerPlayNetworking.send(player, SERVER_SOURCES_BROADCAST_PACKET_ID, buf);

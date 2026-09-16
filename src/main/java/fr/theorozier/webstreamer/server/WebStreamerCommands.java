@@ -1,7 +1,9 @@
 package fr.theorozier.webstreamer.server;
 
 import com.mojang.brigadier.CommandDispatcher;
+import fr.theorozier.webstreamer.WebStreamerMod;
 import fr.theorozier.webstreamer.display.DisplayNetworking;
+import fr.theorozier.webstreamer.util.WebStreamerConfig;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.text.Text;
@@ -15,6 +17,7 @@ public class WebStreamerCommands {
                         .then(CommandManager.literal("reload")
                                 .executes(context -> {
                                     ServerCommandSource source = context.getSource();
+                                    WebStreamerConfig.load(WebStreamerMod.getConfigDir());
                                     int count = ServerSourceRegistry.reload();
                                     if (count < 0) {
                                         source.sendFeedback(() -> Text.literal("\u00a7cFailed to reload sources.txt"), false);
