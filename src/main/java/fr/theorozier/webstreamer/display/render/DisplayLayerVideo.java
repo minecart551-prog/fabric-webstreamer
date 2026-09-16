@@ -173,6 +173,19 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         return this.grabberFailed;
     }
 
+    /**
+     * Whether this layer failed to open/decode and its bounded auto-restart
+     * attempts are exhausted. A permanently failed layer should be released and
+     * rebuilt by the manager (with a possibly re-resolved URI) instead of being
+     * returned forever: for fixed URLs (raw/server/m3u8) re-resolution yields
+     * the same URI, so the renderer's {@code resetSourceUri()} path would
+     * otherwise return this same dead layer every frame — blank display that
+     * only recovers when the block is broken and replaced.
+     */
+    public boolean isPermanentlyFailed() {
+        return this.grabberFailed && this.restartAttempts >= MAX_RESTART_RETRIES;
+    }
+
     @Override
     public void setPlaybackPaused(boolean paused) {
         this.externalPaused = paused;
@@ -643,7 +656,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         }
 
         try {
-            boolean uploadVisible = this.isVisible() && WebStreamerConfig.isVisibleUploadOnly();
+            boolean uploadVisible = !WebStreamerConfig.isVisibleUploadOnly() || this.isVisible();
             if (shouldPause) {
                 if (!this.paused) {
                     this.paused = true;

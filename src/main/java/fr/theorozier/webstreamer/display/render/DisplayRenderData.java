@@ -21,11 +21,20 @@ import java.util.concurrent.Future;
 @Environment(EnvType.CLIENT)
 public class DisplayRenderData {
 
+	/** Backoff between URI resolution retries after a failed/null resolution. A
+	 *  transient failure (e.g. an async Twitch/Server lookup still in flight, or a
+	 *  YouTube hiccup) must not be cached as a permanent "no URI", or the display
+	 *  would stay blank until the block is broken and replaced. */
+	private static final long RESOLVE_RETRY_INTERVAL_NS = 1L * 1_000_000_000L;
+
 	private final DisplayBlockEntity display;
 	
 	private boolean sourceDirty;
 	private Future<URI> futureUri;
 	private URI uri;
+
+	/** Monotonic time before which a resolution retry must not be submitted. */
+	private long nextResolveAttempt = 0;
 	
 	public DisplayRenderData(DisplayBlockEntity display) {
 		this.display = display;
@@ -38,6 +47,7 @@ public class DisplayRenderData {
 	 */
 	public void markSourceDirty() {
 		this.sourceDirty = true;
+		this.nextResolveAttempt = 0;
 	}
 	
 	/**
@@ -49,7 +59,7 @@ public class DisplayRenderData {
 	 */
 	public URI getUri(ExecutorService executor) {
 		
-		if (this.sourceDirty) {
+		if (this.sourceDirty && System.nanoTime() >= this.nextResolveAttempt) {
 			this.uri = null;
 			this.futureUri = executor.submit(() -> {
 				DisplaySource src = this.display.getSource();
@@ -60,14 +70,22 @@ public class DisplayRenderData {
 		}
 		
 		if (this.futureUri != null && this.futureUri.isDone()) {
+			boolean resolved = true;
 			try {
 				this.uri = this.futureUri.get();
+				resolved = this.uri != null;
 			} catch (InterruptedException | CancellationException e) {
-				this.sourceDirty = true;
+				resolved = false;
 			} catch (ExecutionException e) {
-				this.sourceDirty = true;
+				resolved = false;
 			} finally {
 				this.futureUri = null;
+			}
+			if (!resolved) {
+				// Never cache a permanent null/failure: retry after a short backoff
+				// so transient network conditions don't leave the display blank.
+				this.nextResolveAttempt = System.nanoTime() + RESOLVE_RETRY_INTERVAL_NS;
+				this.sourceDirty = true;
 			}
 		}
 		

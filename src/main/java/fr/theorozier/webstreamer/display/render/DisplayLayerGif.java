@@ -423,7 +423,7 @@ public class DisplayLayerGif extends DisplayLayerSimple {
                         this.bufferPool.add(frame.data);
                         frame = this.pendingFrames.poll();
                     }
-                    if (this.isVisible() && WebStreamerConfig.isVisibleUploadOnly()) {
+                    if (!WebStreamerConfig.isVisibleUploadOnly() || this.isVisible()) {
                         this.tex.uploadRaw(frame.data, GL11.GL_RGB8, frame.width, frame.height, frame.stride / 3, GL12.GL_BGR, 4);
                     }
                     this.bufferPool.add(frame.data);

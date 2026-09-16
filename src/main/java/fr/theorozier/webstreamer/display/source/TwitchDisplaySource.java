@@ -30,6 +30,11 @@ public class TwitchDisplaySource extends DisplaySource {
     /** Resolved URI cache, set once the async future completes. */
     private URI resolvedUri;
 
+    /** Whether the last resolution failure was already logged, to avoid log spam
+     *  when the render framework's retry-on-null keeps re-hitting the same
+     *  permanent failure (e.g. an offline channel). */
+    private boolean loggedResolveFailure;
+
     public TwitchDisplaySource() { }
 
     public TwitchDisplaySource(String channel, String quality) {
@@ -40,12 +45,14 @@ public class TwitchDisplaySource extends DisplaySource {
         this.channel = channel;
         this.quality = quality;
         this.resolvedUri = null;
+        this.loggedResolveFailure = false;
     }
 
     public void clearChannelQuality() {
         this.channel = null;
         this.quality = null;
         this.resolvedUri = null;
+        this.loggedResolveFailure = false;
     }
 
     public String getChannel() {
@@ -83,9 +90,15 @@ public class TwitchDisplaySource extends DisplaySource {
                 if (quality != null) {
                     this.resolvedUri = quality.uri();
                 }
+                this.loggedResolveFailure = false;
             } catch (Exception e) {
-                // Ignore — mark source dirty so it retries next tick.
-                WebStreamerMod.LOGGER.warn("Twitch playlist future failed for channel={}", this.channel, e);
+                // Ignore — mark source dirty so it retries next tick. Only log the
+                // first failure; the render framework re-resolves on a backoff and
+                // would otherwise spam the log every retry.
+                if (!this.loggedResolveFailure) {
+                    this.loggedResolveFailure = true;
+                    WebStreamerMod.LOGGER.warn("Twitch playlist future failed for channel={}", this.channel, e);
+                }
             }
         }
 

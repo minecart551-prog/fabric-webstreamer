@@ -441,7 +441,7 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 
 		if (frame != null) {
 			this.profiler.push("upload_image");
-			if (this.isVisible() && WebStreamerConfig.isVisibleUploadOnly()) {
+			if (!WebStreamerConfig.isVisibleUploadOnly() || this.isVisible()) {
 				this.tex.upload(frame);
 				if (!this.linearFilterApplied) {
 					this.linearFilterApplied = true;

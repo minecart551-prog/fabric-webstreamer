@@ -1,8 +1,7 @@
 package fr.theorozier.webstreamer.display.render;
 
-// import fr.theorozier.webstreamer.WebStreamerMod; // Unused
-// import fr.theorozier.webstreamer.display.render.DisplayLayer; // Unused
-// import fr.theorozier.webstreamer.display.render.DisplayLayerNode; // Unused
+import fr.theorozier.webstreamer.WebStreamerMod;
+import fr.theorozier.webstreamer.display.DisplayBlockEntity;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayDeque;
@@ -29,7 +28,7 @@ public abstract class DisplayLayerMap<K> implements DisplayLayerNode {
     /** Keys whose layer creation failed due to the cost budget, retried after a short backoff. */
     private final Map<DisplayLayerNode.Key, Long> blockedLayerCreation = new HashMap<>();
 
-    private static final long CREATION_RETRY_INTERVAL_NS = 500_000_000L;
+	private static final long CREATION_RETRY_INTERVAL_NS = 100_000_000L;
 
     /** Remaining budget of new layer constructions this render tick. Spreading the
      * construction over several frames avoids a per-frame hitch when the player
@@ -122,16 +121,70 @@ public abstract class DisplayLayerMap<K> implements DisplayLayerNode {
         return false;
     }
 
-    protected void cleanupLayersIf(Predicate<K> predicate, long now) {
-        Iterator<Map.Entry<K, DisplayLayerNode>> it = this.layers.entrySet().iterator();
-        while (it.hasNext()) {
-            Map.Entry<K, DisplayLayerNode> entry = it.next();
-            if (predicate.test(entry.getKey()) && entry.getValue().cleanup(now)) {
-                this.currentCost -= entry.getValue().cost();
-                it.remove();
-            }
-        }
-    }
+	protected void cleanupLayersIf(Predicate<K> predicate, long now) {
+		Iterator<Map.Entry<K, DisplayLayerNode>> it = this.layers.entrySet().iterator();
+		while (it.hasNext()) {
+			Map.Entry<K, DisplayLayerNode> entry = it.next();
+			if (predicate.test(entry.getKey()) && entry.getValue().cleanup(now)) {
+				this.currentCost -= entry.getValue().cost();
+				it.remove();
+			}
+		}
+	}
+
+	/**
+	 * Forced teardown of every layer keyed to {@code display}, regardless of its
+	 * URI. Used when a display block is removed while its URI is unresolved or
+	 * blank, cases where a URI-keyed lookup would miss the layer and leave it in
+	 * the map (consuming the cost budget) until the 60s idle cleanup. Also drops
+	 * any pending creation backoff for this display so a fresh layer can start.
+	 */
+	public void cleanupLayersForDisplay(DisplayBlockEntity display) {
+		Iterator<Map.Entry<K, DisplayLayerNode>> it = this.layers.entrySet().iterator();
+		while (it.hasNext()) {
+			Map.Entry<K, DisplayLayerNode> entry = it.next();
+			if (this.belongsToDisplay(entry.getKey(), display)) {
+				this.currentCost -= entry.getValue().cost();
+				it.remove();
+				this.pendingCleanups.add(entry.getValue());
+			}
+		}
+		this.blockedLayerCreation.entrySet().removeIf(e -> e.getKey().display() == display);
+	}
+
+	/**
+	 * Remove layers whose display block entity has been removed from the world,
+	 * even if they haven't idled long enough for the regular {@link #cleanup(long)}
+	 * pass. Guards against orphan layers (e.g. a block broken while its URI was
+	 * unresolved) lingering and starving other displays of budget.
+	 */
+	protected void cleanupOrphanedDisplays() {
+		Iterator<Map.Entry<K, DisplayLayerNode>> it = this.layers.entrySet().iterator();
+		while (it.hasNext()) {
+			Map.Entry<K, DisplayLayerNode> entry = it.next();
+			if (this.isDisplayRemoved(entry.getKey())) {
+				this.currentCost -= entry.getValue().cost();
+				it.remove();
+				this.pendingCleanups.add(entry.getValue());
+			}
+		}
+	}
+
+	/**
+	 * Whether {@code key} is keyed to {@code display}. Defaults to false; subclasses
+	 * whose keys reference a display override this.
+	 */
+	protected boolean belongsToDisplay(K key, DisplayBlockEntity display) {
+		return false;
+	}
+
+	/**
+	 * Whether the display that owns {@code key} has been removed from the world.
+	 * Defaults to false; subclasses whose keys reference a display override this.
+	 */
+	protected boolean isDisplayRemoved(K key) {
+		return false;
+	}
 
     @Override
     public int cost() {
@@ -146,6 +199,17 @@ public abstract class DisplayLayerMap<K> implements DisplayLayerNode {
         if (layer instanceof DisplayLayerSimple simpleLayer && simpleLayer.isDestroyed()) {
             this.removeLayer(layerKey, layer);
             return null;
+        }
+        // Release permanently failed video layers so a fresh attempt (with a
+        // possibly re-resolved URI) can build. Otherwise such a layer is returned
+        // every frame and the display stays blank — recovering only when the
+        // block is broken and replaced — while the dead layer keeps holding
+        // budget that could serve another display.
+        if (layer instanceof DisplayLayerVideo videoLayer && videoLayer.isPermanentlyFailed()) {
+            WebStreamerMod.LOGGER.info("Rebuilding permanently failed video layer for {}", key.uri());
+            this.removeLayer(layerKey, layer);
+            this.pendingCleanups.add(layer);
+            layer = null;
         }
         if (layer == null) {
             // A layer for the same display may already be decoding the requested

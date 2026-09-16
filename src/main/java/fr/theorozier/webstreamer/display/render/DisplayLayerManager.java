@@ -2,6 +2,7 @@ package fr.theorozier.webstreamer.display.render;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import fr.theorozier.webstreamer.WebStreamerMod;
+import fr.theorozier.webstreamer.display.DisplayBlockEntity;
 import fr.theorozier.webstreamer.util.FFmpegLibrary;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
@@ -54,7 +55,8 @@ public class DisplayLayerManager extends DisplayLayerMap<DisplayLayerNode.Key> {
 
         long now = System.nanoTime();
         if (now - this.lastCleanup >= CLEANUP_INTERVAL) {
-            super.cleanup(now); // Super to avoid redundant render thread check.
+            super.cleanup(now);
+            this.cleanupOrphanedDisplays();
             this.lastCleanup = now;
         }
 
@@ -64,6 +66,17 @@ public class DisplayLayerManager extends DisplayLayerMap<DisplayLayerNode.Key> {
     public boolean cleanup(long now) {
         RenderSystem.assertOnRenderThread();
         return super.cleanup(now);
+    }
+
+    @Override
+    protected boolean belongsToDisplay(Key key, DisplayBlockEntity display) {
+        return key.display() == display;
+    }
+
+    @Override
+    protected boolean isDisplayRemoved(Key key) {
+        DisplayBlockEntity d = key.display();
+        return d != null && d.isRemoved();
     }
 
     @Override
