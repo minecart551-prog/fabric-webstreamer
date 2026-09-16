@@ -29,9 +29,9 @@ import java.util.concurrent.TimeUnit;
 public class DisplayLayerGif extends DisplayLayerSimple {
 
     private static final int MAX_FAILED_GRABS = 5;
-    private static final int FRAME_BUFFER_POOL_SIZE = 8;
+    private static final int FRAME_BUFFER_POOL_SIZE = 4;
     private static final int FRAME_BUFFER_SIZE = 512 * 1024;
-    private static final int MAX_PENDING_FRAMES = 8;
+    private static final int MAX_PENDING_FRAMES = 4;
     private static final String USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
                     "AppleWebKit/537.36 (KHTML, like Gecko) " +
@@ -47,6 +47,15 @@ public class DisplayLayerGif extends DisplayLayerSimple {
 
     private long lastTickNanos = 0;
     private long playbackMicros = 0;
+
+    /** Gif-time position (microseconds) of the decode thread's latest decoded image
+     * frame. Written by the decode thread, read by the render thread to realign the
+     * playback clock when decoding resumes, so it must be volatile. */
+    private volatile long decodePositionMicros = 0;
+
+    /** Whether the layer was decodable (in range and on screen) on the last tick,
+     * used to detect a resume and realign playback before fast-forwarding. */
+    private boolean lastShouldDecode = true;
 
     private final Queue<PooledGifFrame> pendingFrames = new ConcurrentLinkedQueue<>();
     private final LinkedBlockingQueue<ByteBuffer> bufferPool = new LinkedBlockingQueue<>();
@@ -73,6 +82,34 @@ public class DisplayLayerGif extends DisplayLayerSimple {
     public DisplayLayerGif(URI uri, DisplayLayerResources res, boolean randomStartFrame) {
         super(uri, res);
         this.randomStartFrame = randomStartFrame;
+    }
+
+    /**
+     * Whether background decoding should currently run. Decoding is paused when the
+     * display is out of range or out of view (when visible-upload-only is enabled),
+     * so the decode thread doesn't accumulate backlog or waste CPU behind your back.
+     */
+    private boolean shouldDecode() {
+        if (!this.isInRange()) {
+            return false;
+        }
+        return !WebStreamerConfig.isVisibleUploadOnly() || this.isVisible();
+    }
+
+    @Override
+    public void setInRange(boolean inRange) {
+        boolean prev = this.isInRange();
+        super.setInRange(inRange);
+        if (inRange && !prev) {
+            // Just re-entered range while decode was paused. Realign the playback
+            // clock to where the decoder currently is and drop any stale backlog,
+            // so the gif resumes seamlessly instead of fast-forwarding through
+            // frames that were decoded while we were away.
+            this.pendingFrames.clear();
+            this.playbackMicros = this.decodePositionMicros;
+            this.lastTickNanos = System.nanoTime();
+            this.lastShouldDecode = true;
+        }
     }
 
     @Override
@@ -201,6 +238,15 @@ public class DisplayLayerGif extends DisplayLayerSimple {
     private void backgroundDecodeLoop() {
         try {
             while (!this.destroyed && !this.decodeFinished) {
+                // Pause decoding while the display is out of range or off screen:
+                // there is nobody to watch it, so keep the queue from running ahead
+                // of the playback clock (which is what caused a fast-forward burst
+                // when coming back into range).
+                while (!this.destroyed && !this.decodeFinished && !this.shouldDecode()) {
+                    Thread.sleep(10);
+                }
+                if (this.destroyed || this.decodeFinished) break;
+
                 // Throttle: wait if too many frames are pending (prevents unbounded memory growth)
                 while (!this.destroyed && !this.decodeFinished && this.pendingFrames.size() >= MAX_PENDING_FRAMES) {
                     Thread.sleep(10);
@@ -232,6 +278,7 @@ public class DisplayLayerGif extends DisplayLayerSimple {
                     src.position(srcPos);
                     buf.flip();
                     this.pendingFrames.add(new PooledGifFrame(buf, frame.imageWidth, frame.imageHeight, frame.imageStride, frame.timestamp));
+                    this.decodePositionMicros = frame.timestamp;
                 }
             }
         } catch (InterruptedException e) {
@@ -247,9 +294,11 @@ public class DisplayLayerGif extends DisplayLayerSimple {
 
     private void loopGif() {
         WebStreamerMod.LOGGER.debug(makeLog("GIF loop restart"));
-        this.playbackMicros = 0;
-        this.lastTickNanos = System.nanoTime();
+        // The decode thread only owns the grabber side of the loop. The playback
+        // clock (playbackMicros/lastTickNanos) belongs to the render thread and is
+        // realigned on resume, so it must not be touched here.
         this.pendingFrames.clear();
+        this.decodePositionMicros = 0;
         if (this.grabber != null) {
             try {
                 this.grabber.setTimestamp(0);
@@ -294,8 +343,11 @@ public class DisplayLayerGif extends DisplayLayerSimple {
         }
         this.pendingFrames.clear();
         this.bufferPool.clear();
-        deleteTempFile(this.tempFile);
-        this.tempFile = null;
+        // NOTE: the temp file is NOT deleted here on purpose. The decode thread's
+        // finally block owns deletion (it only runs after the grabber released the
+        // file). Deleting it from the render thread would retry-block for up to
+        // 3x50ms while the file is still open — freezing the frame for every GIF
+        // torn down when leaving an area with many displays.
         this.grabberReady = false;
         this.grabberPending = false;
     }
@@ -339,11 +391,25 @@ public class DisplayLayerGif extends DisplayLayerSimple {
 
         if (!this.grabberReady) return;
 
+        boolean shouldDecode = this.shouldDecode();
+
         long now = System.nanoTime();
-        if (this.lastTickNanos > 0) {
-            this.playbackMicros += (now - this.lastTickNanos) / 1000L;
+        if (shouldDecode && !this.lastShouldDecode) {
+            // Decode was paused (off screen) and just became needed again.
+            // Realign the playback clock to where the decoder currently is and
+            // drop the stale backlog, so playback resumes without fast-forwarding
+            // through frames that were skipped while invisible.
+            this.pendingFrames.clear();
+            this.playbackMicros = this.decodePositionMicros;
+            this.lastTickNanos = now;
+            this.lastShouldDecode = true;
+        } else {
+            this.lastShouldDecode = shouldDecode;
+            if (this.lastTickNanos > 0) {
+                this.playbackMicros += (now - this.lastTickNanos) / 1000L;
+            }
+            this.lastTickNanos = now;
         }
-        this.lastTickNanos = now;
 
         try {
             PooledGifFrame frame;

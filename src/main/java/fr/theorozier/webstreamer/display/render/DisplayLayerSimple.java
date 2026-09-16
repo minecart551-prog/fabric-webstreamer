@@ -30,8 +30,9 @@ public abstract class DisplayLayerSimple implements DisplayLayerNode, DisplayLay
 	/** Time in nanoseconds (monotonic) of the last use. */
 	protected long lastUse = 0;
 
-	/** Whether this layer is currently in range for ticking/rendering. */
-	private boolean inRange = true;
+	/** Whether this layer is currently in range for ticking/rendering. Read
+	 *  from background decode threads, so it must be volatile. */
+	private volatile boolean inRange = true;
 
 	/**
 	 * Whether this layer is currently on screen (upload gate). Decided by the
