@@ -4,6 +4,7 @@ import fr.theorozier.webstreamer.WebStreamerMod;
 import fr.theorozier.webstreamer.display.audio.AudioStreamingSource;
 import fr.theorozier.webstreamer.util.AsyncMap;
 import fr.theorozier.webstreamer.util.AsyncProcessor;
+import fr.theorozier.webstreamer.util.WebStreamerConfig;
 import io.lindstrom.m3u8.model.MediaPlaylist;
 import io.lindstrom.m3u8.model.MediaSegment;
 import io.lindstrom.m3u8.parser.MediaPlaylistParser;
@@ -440,10 +441,12 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 
 		if (frame != null) {
 			this.profiler.push("upload_image");
-			this.tex.upload(frame);
-			if (!this.linearFilterApplied) {
-				this.linearFilterApplied = true;
-				this.tex.setLinearFilter();
+			if (this.isVisible() && WebStreamerConfig.isVisibleUploadOnly()) {
+				this.tex.upload(frame);
+				if (!this.linearFilterApplied) {
+					this.linearFilterApplied = true;
+					this.tex.setLinearFilter();
+				}
 			}
 			this.profiler.swap("play_audio");
 			if (!this.audioSource.isPlaying()) {

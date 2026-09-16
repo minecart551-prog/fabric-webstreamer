@@ -57,11 +57,11 @@ public class FrameGrabber {
 			throw new IllegalStateException("already started");
 		}
 
-		// Lazily load FFmpeg native libraries on first actual use.
+		// Lazily load and link FFmpeg native libraries on first actual use.
 		// This must happen AFTER the GLFW window is created to avoid
 		// interfering with GLX/GLXFBConfig initialization on some
 		// GPU/driver combinations (e.g. AMD Radeon RX 7900 XTX / radeonsi).
-		FFmpegLibrary.ensureInitialized();
+		FFmpegLibrary.initializeFrameGrabber();
 		
 		try {
 
@@ -98,7 +98,7 @@ public class FrameGrabber {
 				}
 			}
 
-		} catch (IOException | InterruptedException | RuntimeException e) {
+		} catch (IOException | InterruptedException | RuntimeException | LinkageError e) {
 
 			if (this.grabber != null) {
 				this.grabber.releaseUnsafe();
@@ -118,6 +118,10 @@ public class FrameGrabber {
 				throw new IOException(e);
 			} else if (e instanceof IOException) {
 				throw (IOException) e;
+			} else if (e instanceof LinkageError) {
+				// Native library failed to load/link (e.g. missing FFmpeg DLLs).
+				// Surface as a normal fetch failure so the HLS layer recovers.
+				throw new IOException("Failed to initialize FFmpeg frame grabber", e);
 			} else {
 				throw (RuntimeException) e;
 			}

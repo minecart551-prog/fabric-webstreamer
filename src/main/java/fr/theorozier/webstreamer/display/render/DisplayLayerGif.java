@@ -2,6 +2,7 @@ package fr.theorozier.webstreamer.display.render;
 
 import fr.theorozier.webstreamer.WebStreamerMod;
 import fr.theorozier.webstreamer.util.FFmpegLibrary;
+import fr.theorozier.webstreamer.util.WebStreamerConfig;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
@@ -189,7 +190,7 @@ public class DisplayLayerGif extends DisplayLayerSimple {
             this.grabberReady = true;
             this.grabberPending = false;
 
-        } catch (Exception e) {
+        } catch (Throwable e) {
             WebStreamerMod.LOGGER.error(makeLog("Failed to start GIF grabber."), e);
             deleteTempFile(tmp);
             this.grabberFailed = true;
@@ -262,7 +263,7 @@ public class DisplayLayerGif extends DisplayLayerSimple {
                 FFmpegFrameGrabber fg = new FFmpegFrameGrabber(this.tempFile.toString());
                 fg.startUnsafe();
                 this.grabber = fg;
-            } catch (Exception e2) {
+            } catch (Throwable e2) {
                 WebStreamerMod.LOGGER.error(makeLog("Failed to loop GIF."), e2);
                 this.stopGrabber();
                 this.grabberFailed = true;
@@ -356,7 +357,9 @@ public class DisplayLayerGif extends DisplayLayerSimple {
                         this.bufferPool.add(frame.data);
                         frame = this.pendingFrames.poll();
                     }
-                    this.tex.uploadRaw(frame.data, GL11.GL_RGB8, frame.width, frame.height, frame.stride / 3, GL12.GL_BGR, 4);
+                    if (this.isVisible() && WebStreamerConfig.isVisibleUploadOnly()) {
+                        this.tex.uploadRaw(frame.data, GL11.GL_RGB8, frame.width, frame.height, frame.stride / 3, GL12.GL_BGR, 4);
+                    }
                     this.bufferPool.add(frame.data);
                     this.failedGrabs = 0;
                 } else {

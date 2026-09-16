@@ -273,7 +273,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 }
             }
 
-        } catch (Exception e) {
+        } catch (Throwable e) {
             WebStreamerMod.LOGGER.error(makeLog("Failed to start video stream."), e);
             this.res.freeAudioBuffer(audioBuf);
             this.bufferPool.clear();
@@ -518,7 +518,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 fg.setOption("headers", "Referer: https://www.youtube.com/");
                 fg.startUnsafe();
                 this.grabber = fg;
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 WebStreamerMod.LOGGER.error(makeLog("Failed to loop video."), e);
                 this.stopGrabber();
                 this.grabberFailed = true;
@@ -581,6 +581,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         }
 
         try {
+            boolean uploadVisible = this.isVisible() && WebStreamerConfig.isVisibleUploadOnly();
             if (shouldPause) {
                 if (!this.paused) {
                     this.paused = true;
@@ -622,10 +623,12 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                         this.bufferPool.add(pvf.data);
                         pvf = this.pendingVideoFrames.poll();
                     }
-                    this.tex.uploadRaw(pvf.data, GL11.GL_RGB8, pvf.width, pvf.height, pvf.stride / 3, GL12.GL_BGR, 4);
-                    if (!this.linearFilterApplied) {
-                        this.linearFilterApplied = true;
-                        this.tex.setLinearFilter();
+                    if (uploadVisible) {
+                        this.tex.uploadRaw(pvf.data, GL11.GL_RGB8, pvf.width, pvf.height, pvf.stride / 3, GL12.GL_BGR, 4);
+                        if (!this.linearFilterApplied) {
+                            this.linearFilterApplied = true;
+                            this.tex.setLinearFilter();
+                        }
                     }
                     this.bufferPool.add(pvf.data);
                     this.playbackMicros = pvf.timestamp;
@@ -665,7 +668,9 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                     lastFrame = tmp;
                 }
                 if (lastFrame != null) {
-                    this.tex.uploadRaw(lastFrame.data, GL11.GL_RGB8, lastFrame.width, lastFrame.height, lastFrame.stride / 3, GL12.GL_BGR, 4);
+                    if (uploadVisible) {
+                        this.tex.uploadRaw(lastFrame.data, GL11.GL_RGB8, lastFrame.width, lastFrame.height, lastFrame.stride / 3, GL12.GL_BGR, 4);
+                    }
                     this.bufferPool.add(lastFrame.data);
                     framesDisplayed++;
                 }

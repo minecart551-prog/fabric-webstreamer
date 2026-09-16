@@ -8,12 +8,23 @@ import fr.theorozier.webstreamer.display.DisplayBlock;
 import fr.theorozier.webstreamer.display.DisplayBlockEntity;
 import fr.theorozier.webstreamer.display.DisplayNetworking;
 import fr.theorozier.webstreamer.display.TVBlock;
+import com.mojang.blaze3d.systems.RenderSystem;
+import fr.theorozier.webstreamer.WebStreamerClientMod;
+import fr.theorozier.webstreamer.WebStreamerMod;
+import fr.theorozier.webstreamer.config.WebStreamerClientConfig;
+import fr.theorozier.webstreamer.display.BigTVBlock;
+import fr.theorozier.webstreamer.display.DisplayBlock;
+import fr.theorozier.webstreamer.display.DisplayBlockEntity;
+import fr.theorozier.webstreamer.display.DisplayNetworking;
+import fr.theorozier.webstreamer.display.TVBlock;
 import fr.theorozier.webstreamer.mixin.WorldRendererInvoker;
+import fr.theorozier.webstreamer.util.WebStreamerConfig;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.font.TextRenderer.TextLayerType;
+import net.minecraft.client.render.Camera;
 import net.minecraft.client.render.GameRenderer;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.VertexConsumer;
@@ -25,6 +36,7 @@ import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.shape.VoxelShape;
@@ -33,6 +45,7 @@ import net.minecraft.world.World;
 import org.joml.AxisAngle4d;
 import org.joml.Matrix4f;
 import org.joml.Quaternionf;
+import org.joml.Vector4f;
 
 import java.net.URI;
 import java.util.stream.StreamSupport;
@@ -72,6 +85,53 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
 
     private static boolean isTVBlock(net.minecraft.block.Block block) {
         return block instanceof TVBlock || block instanceof BigTVBlock;
+    }
+
+    /**
+     * Project the display's bounding box into the viewport and test whether any
+     * corner lands on screen (in front of the camera and inside NDC [-1,1]).
+     * Replicates the exact camera-space transform the game uses for frustum
+     * culling (WorldRenderer.setupFrustum): view = RotX(pitch) * RotY(yaw+180)
+     * applied to (world - camera), the projection being the current world
+     * projection. Because it matches how the game renders, the gates on this
+     * never drop a display that is genuinely on screen.
+     */
+    private boolean isDisplayOnScreen(DisplayBlockEntity entity) {
+        Camera camera = this.gameRenderer.getCamera();
+        Vec3d camPos = camera.getPos();
+
+        Matrix4f view = new Matrix4f()
+                .rotateX((float) Math.toRadians(camera.getPitch()))
+                .rotateY((float) Math.toRadians(camera.getYaw() + 180.0f));
+        Matrix4f combined = new Matrix4f(RenderSystem.getProjectionMatrix());
+        combined.mul(view);
+        combined.translate((float) -camPos.x, (float) -camPos.y, (float) -camPos.z);
+
+        Box bb = new Box(entity.getPos());
+        float hx = (float) ((bb.maxX - bb.minX) / 2d);
+        float hy = (float) ((bb.maxY - bb.minY) / 2d);
+        float hz = (float) ((bb.maxZ - bb.minZ) / 2d);
+        float cx = (float) ((bb.minX + bb.maxX) / 2d);
+        float cy = (float) ((bb.minY + bb.maxY) / 2d);
+        float cz = (float) ((bb.minZ + bb.maxZ) / 2d);
+
+        for (int sx = -1; sx <= 1; sx += 2) {
+            for (int sy = -1; sy <= 1; sy += 2) {
+                for (int sz = -1; sz <= 1; sz += 2) {
+                    Vector4f corner = new Vector4f(cx + sx * hx, cy + sy * hy, cz + sz * hz, 1.0f);
+                    corner.mul(combined);
+                    // Corners behind the camera are not visible; if none is in
+                    // front (w > 0) the whole box is behind us.
+                    if (corner.w <= 0.0f) continue;
+                    float nx = corner.x / corner.w;
+                    float ny = corner.y / corner.w;
+                    if (nx >= -1.0f && nx <= 1.0f && ny >= -1.0f && ny <= 1.0f) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     @Override
@@ -237,6 +297,10 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
                 layer.setPlaybackPaused(entity.isPlaybackPaused());
                 if (layer instanceof DisplayLayerSimple simpleLayer) {
                     simpleLayer.setInRange(inRange);
+                    // When visible-upload-only is disabled, always treat the layer
+                    // as on screen so uploads are never gated.
+                    boolean onScreen = !WebStreamerConfig.isVisibleUploadOnly() || this.isDisplayOnScreen(entity);
+                    simpleLayer.markSeen(DisplayLayerManager.getRenderFrame(), inRange && onScreen);
                 }
 
                 if (!inRange) {

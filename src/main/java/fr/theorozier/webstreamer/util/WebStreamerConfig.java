@@ -18,8 +18,10 @@ public class WebStreamerConfig {
 
     private static final String FILE_NAME = "config.properties";
     private static final String DEBUG_KEY = "debug";
+    private static final String VISIBLE_UPLOAD_ONLY_KEY = "visible-upload-only";
 
     private static volatile boolean debug = false;
+    private static volatile boolean visibleUploadOnly = true;
 
     private WebStreamerConfig() {
     }
@@ -37,14 +39,17 @@ public class WebStreamerConfig {
             writeDefaults(file);
         }
         boolean dbg = false;
+        boolean vup = true;
         Properties props = new Properties();
         try (InputStream is = Files.newInputStream(file)) {
             props.load(is);
             dbg = Boolean.parseBoolean(props.getProperty(DEBUG_KEY, "false"));
+            vup = Boolean.parseBoolean(props.getProperty(VISIBLE_UPLOAD_ONLY_KEY, "true"));
         } catch (Exception e) {
             WebStreamerMod.LOGGER.warn("[Config] Failed to read config.properties, using defaults: {}", e.getMessage());
         }
         debug = dbg;
+        visibleUploadOnly = vup;
     }
 
     /**
@@ -52,6 +57,15 @@ public class WebStreamerConfig {
      */
     public static boolean isDebug() {
         return debug;
+    }
+
+    /**
+     * Whether texture uploads should be skipped for displays that are not on
+     * screen. Decoding and audio keep running regardless; only the per-frame
+     * GL upload is gated, plus the full render for out-of-range displays.
+     */
+    public static boolean isVisibleUploadOnly() {
+        return visibleUploadOnly;
     }
 
     /**
@@ -80,6 +94,7 @@ public class WebStreamerConfig {
             }
             Properties defaults = new Properties();
             defaults.setProperty(DEBUG_KEY, "false");
+            defaults.setProperty(VISIBLE_UPLOAD_ONLY_KEY, "true");
             try (OutputStream os = Files.newOutputStream(file)) {
                 defaults.store(os, "WebStreamer configuration");
             }

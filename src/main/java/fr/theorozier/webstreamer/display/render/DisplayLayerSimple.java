@@ -33,6 +33,25 @@ public abstract class DisplayLayerSimple implements DisplayLayerNode, DisplayLay
 	/** Whether this layer is currently in range for ticking/rendering. */
 	private boolean inRange = true;
 
+	/**
+	 * Whether this layer is currently on screen (upload gate). Decided by the
+	 * renderer via {@link #markSeen(int, boolean)} and decayed automatically by
+	 * {@link #updateVisibility(int)} when the display stops being rendered, so
+	 * frame uploads are skipped while nobody is looking at the display — while
+	 * decode and audio keep running in the background.
+	 */
+	private boolean visible = false;
+
+	/** Visibility last reported by the block-entity renderer, and the frame it was reported in. */
+	private boolean seenVisible = false;
+	private int seenFrame = Integer.MIN_VALUE;
+
+	/**
+	 * How many render frames may pass without a fresh {@code markSeen} before a
+	 * layer is treated as invisible (i.e. its chunk left the view frustum).
+	 */
+	private static final int VISIBILITY_FRAME_TOLERANCE = 2;
+
 	// Allow subclasses and this class to check destroyed state
 	protected boolean destroyed = false;
 
@@ -47,6 +66,42 @@ public abstract class DisplayLayerSimple implements DisplayLayerNode, DisplayLay
 
 	public boolean isInRange() {
 		return this.inRange;
+	}
+
+	/**
+	 * Report whether this layer was on screen during a render pass. Called from
+	 * the block-entity renderer every frame it handles a display.
+	 *
+	 * @param frame The current render-frame counter.
+	 * @param onScreen Whether the display is currently projected into the viewport.
+	 */
+	public void markSeen(int frame, boolean onScreen) {
+		this.seenFrame = frame;
+		this.seenVisible = onScreen;
+	}
+
+	/**
+	 * Recompute the upload-visibility from the last renderer report. Called once
+	 * per frame for every layer; a layer whose display stopped being rendered
+	 * (e.g. its chunk left the view frustum) decays to invisible automatically.
+	 */
+	public void updateVisibility(int frame) {
+		this.visible = this.seenVisible && (frame - this.seenFrame) <= VISIBILITY_FRAME_TOLERANCE;
+	}
+
+	/**
+	 * Whether the renderer recently reported this layer as on screen. Guards the
+	 * per-frame texture upload only — decode and audio keep running regardless.
+	 */
+	public boolean isVisible() {
+		return this.visible;
+	}
+
+	/**
+	 * Time in nanoseconds (monotonic) of the last use, used for LRU eviction.
+	 */
+	public long getLastUse() {
+		return this.lastUse;
 	}
 	
 	public DisplayLayerSimple(URI uri, DisplayLayerResources res) {

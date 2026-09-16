@@ -2,6 +2,7 @@ package fr.theorozier.webstreamer.display.render;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import fr.theorozier.webstreamer.WebStreamerMod;
+import fr.theorozier.webstreamer.util.FFmpegLibrary;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import org.jetbrains.annotations.NotNull;
@@ -30,6 +31,16 @@ public class DisplayLayerManager extends DisplayLayerMap<DisplayLayerNode.Key> {
     private long lastCostWarning = 0;
     private static final long COST_WARNING_INTERVAL = 30L * 1_000_000_000L;
 
+    /** Minimum idle time before a layer may be evicted by LRU to free budget. */
+    private static final long EVICT_MIN_AGE_NS = 2L * 1_000_000_000L;
+
+    /** Monotonic counter of render frames, bumped once per frame in {@link #tick()}. */
+    private static int renderFrame = 0;
+
+    public static int getRenderFrame() {
+        return renderFrame;
+    }
+
     public DisplayLayerResources getResources() {
         return this.res;
     }
@@ -38,6 +49,7 @@ public class DisplayLayerManager extends DisplayLayerMap<DisplayLayerNode.Key> {
     public void tick() {
 
         RenderSystem.assertOnRenderThread();
+        renderFrame++;
         super.tick();
 
         long now = System.nanoTime();
@@ -73,6 +85,12 @@ public class DisplayLayerManager extends DisplayLayerMap<DisplayLayerNode.Key> {
             throw new UnknownFormatException();
         }
 
+        // Try to free budget by evicting an idle layer before giving up, so
+        // more displays than the theoretical cost minimum can play at once.
+        if (this.cost() >= MAX_LAYERS_COST) {
+            this.evictLeastRecentlyUsed(EVICT_MIN_AGE_NS);
+        }
+
         if (this.cost() >= MAX_LAYERS_COST) {
             long now = System.nanoTime();
             if (now - this.lastCostWarning >= COST_WARNING_INTERVAL) {
@@ -86,8 +104,10 @@ public class DisplayLayerManager extends DisplayLayerMap<DisplayLayerNode.Key> {
         String path = key.uri().getPath();
         if (path != null) {
             if (path.endsWith(".m3u8")) {
+                FFmpegLibrary.initializeFrameGrabber();
                 return new DisplayLayerHls(key.uri(), this.res);
             } else if (path.endsWith(".gif")) {
+                FFmpegLibrary.initializeFrameGrabber();
                 boolean randomStart = false;
                 if (key.display() != null) {
                     if (key.display().getSource() instanceof fr.theorozier.webstreamer.display.source.RawDisplaySource rawSrc) {
@@ -110,6 +130,7 @@ public class DisplayLayerManager extends DisplayLayerMap<DisplayLayerNode.Key> {
         // DisplayLayerVideo which feeds the URL straight into FrameGrabber.
         String scheme = key.uri().getScheme();
         if ("http".equals(scheme) || "https".equals(scheme)) {
+            FFmpegLibrary.initializeFrameGrabber();
             return new DisplayLayerVideo(key, this.res);
         }
 

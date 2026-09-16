@@ -52,7 +52,27 @@ public interface DisplayLayerNode {
      */
     record Key(URI uri, DisplayBlockEntity display) { }
 
-    class OutOfLayerException extends Exception {}
-    class UnknownFormatException extends Exception {}
+    /**
+     * Thrown when the layer cost budget is exhausted. Instances are created on a
+     * hot path (per-frame, once per display over capacity), so stack-trace
+     * capture is disabled to keep throwing cheap.
+     */
+    class OutOfLayerException extends Exception {
+        @Override
+        public Throwable fillInStackTrace() {
+            return this;
+        }
+    }
+
+    /**
+     * Thrown when the combination of URI and display is not valid for creating a
+     * display layer. Same hot-path consideration as {@link OutOfLayerException}.
+     */
+    class UnknownFormatException extends Exception {
+        @Override
+        public Throwable fillInStackTrace() {
+            return this;
+        }
+    }
 
 }
