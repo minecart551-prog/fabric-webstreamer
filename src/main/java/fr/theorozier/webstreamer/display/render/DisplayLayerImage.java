@@ -33,10 +33,20 @@ public class DisplayLayerImage extends DisplayLayerSimple {
 	
 	private long imageNextRequestTimestamp = 0;
 	private boolean imageUploaded = false;
+	private boolean permanentlyFailed = false;
 	private Future<STBLoadedImage> futureImage;
 	
 	public DisplayLayerImage(URI uri, DisplayLayerResources res) {
 		super(uri, res);
+	}
+
+	@Override
+	public boolean isLost() {
+		return this.permanentlyFailed;
+	}
+
+	public boolean isPermanentlyFailed() {
+		return this.permanentlyFailed;
 	}
 
 	@Override
@@ -69,8 +79,14 @@ public class DisplayLayerImage extends DisplayLayerSimple {
 			} catch (InterruptedException | CancellationException e) {
 				// Should not happen
 			} catch (ExecutionException e) {
-				WebStreamerMod.LOGGER.error(makeLog("Failed to request image, retrying in {} seconds."), FAILING_IMAGE_REQUEST_INTERVAL / 1000000000, e.getCause());
-				this.imageNextRequestTimestamp = now + FAILING_IMAGE_REQUEST_INTERVAL;
+				Throwable cause = e.getCause();
+				if (cause instanceof IOException ioe && isPermanentHttpError(ioe)) {
+					WebStreamerMod.LOGGER.error(makeLog("Image permanently unavailable: {}"), ioe.getMessage());
+					this.permanentlyFailed = true;
+				} else {
+					WebStreamerMod.LOGGER.error(makeLog("Failed to request image, retrying in {} seconds."), FAILING_IMAGE_REQUEST_INTERVAL / 1000000000, cause);
+					this.imageNextRequestTimestamp = now + FAILING_IMAGE_REQUEST_INTERVAL;
+				}
 			} finally {
 				this.futureImage = null;
 				if (img != null) {
@@ -80,6 +96,12 @@ public class DisplayLayerImage extends DisplayLayerSimple {
 			
 		}
 		
+	}
+
+	private static boolean isPermanentHttpError(IOException e) {
+		String msg = e.getMessage();
+		if (msg == null) return false;
+		return msg.contains("status code: 404") || msg.contains("status code: 410");
 	}
 
 	protected STBLoadedImage requestImageBlocking() throws IOException {

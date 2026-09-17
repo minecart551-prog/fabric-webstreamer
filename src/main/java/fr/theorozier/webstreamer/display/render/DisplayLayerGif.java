@@ -29,6 +29,8 @@ import java.util.concurrent.TimeUnit;
 public class DisplayLayerGif extends DisplayLayerSimple {
 
     private static final int MAX_FAILED_GRABS = 5;
+    private static final int MAX_RESTART_RETRIES = 3;
+    private static final long RESTART_RETRY_INTERVAL_NS = 2L * 1_000_000_000L;
     private static final int FRAME_BUFFER_POOL_SIZE = 4;
     private static final int FRAME_BUFFER_SIZE = 512 * 1024;
     private static final int MAX_PENDING_FRAMES = 4;
@@ -44,6 +46,8 @@ public class DisplayLayerGif extends DisplayLayerSimple {
     private boolean grabberFailed = false;
     private boolean grabberFailureLogged = false;
     private int failedGrabs = 0;
+    private int restartAttempts = 0;
+    private long lastRestartAttemptNanos = 0;
 
     private long lastTickNanos = 0;
     private long playbackMicros = 0;
@@ -130,6 +134,10 @@ public class DisplayLayerGif extends DisplayLayerSimple {
     @Override
     public boolean isLost() {
         return this.grabberFailed;
+    }
+
+    public boolean isPermanentlyFailed() {
+        return this.grabberFailed && this.restartAttempts >= MAX_RESTART_RETRIES;
     }
 
     private void startSetup() {
@@ -228,9 +236,11 @@ public class DisplayLayerGif extends DisplayLayerSimple {
             this.grabberPending = false;
 
         } catch (Throwable e) {
-            WebStreamerMod.LOGGER.error(makeLog("Failed to start GIF grabber."), e);
+            if (!this.destroyed) {
+                WebStreamerMod.LOGGER.error(makeLog("Failed to start GIF grabber."), e);
+                this.grabberFailed = true;
+            }
             deleteTempFile(tmp);
-            this.grabberFailed = true;
             this.grabberPending = false;
         }
     }
@@ -379,6 +389,20 @@ public class DisplayLayerGif extends DisplayLayerSimple {
             if (!this.grabberFailureLogged) {
                 WebStreamerMod.LOGGER.info(makeLog("GIF grabber failed."));
                 this.grabberFailureLogged = true;
+            }
+            if (this.restartAttempts < MAX_RESTART_RETRIES
+                    && System.nanoTime() - this.lastRestartAttemptNanos >= RESTART_RETRY_INTERVAL_NS) {
+                this.lastRestartAttemptNanos = System.nanoTime();
+                this.restartAttempts++;
+                WebStreamerConfig.debugLog(makeLog("Auto-retrying GIF after grabber failure (attempt {}/{})."),
+                        this.restartAttempts, MAX_RESTART_RETRIES);
+                this.grabberFailed = false;
+                this.grabberFailureLogged = false;
+                this.failedGrabs = 0;
+                this.stopGrabber();
+                this.grabberReady = false;
+                this.grabberPending = false;
+                this.decodeFinished = false;
             }
             return;
         }
