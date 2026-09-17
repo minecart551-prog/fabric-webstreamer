@@ -219,13 +219,6 @@ public abstract class DisplayLayerMap<K> implements DisplayLayerNode {
             this.pendingCleanups.add(layer);
             layer = null;
         }
-        if (layer instanceof DisplayLayerImage imageLayer && imageLayer.isPermanentlyFailed()) {
-            WebStreamerMod.LOGGER.info("Rebuilding permanently failed image layer for {}", key.uri());
-            key.display().markRenderDataSourceDirty();
-            this.removeLayer(layerKey, layer);
-            this.pendingCleanups.add(layer);
-            layer = null;
-        }
         if (layer == null) {
             // A layer for the same display may already be decoding the requested
             // content under a stale key (e.g. a playlist advanced and the layer

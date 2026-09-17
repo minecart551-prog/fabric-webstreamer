@@ -57,6 +57,8 @@ public class DisplayLayerImage extends DisplayLayerSimple {
 	@Override
 	public void tick() {
 		
+		if (this.permanentlyFailed) return;
+
 		long now = System.nanoTime();
 		
 		if (this.futureImage == null) {
