@@ -67,6 +67,8 @@ public class DisplayBlockEntity extends BlockEntity {
     private float rotationX = 0f;
     private float rotationY = 0f;
     private float rotationZ = 0f;
+    private float curvature = 0f;
+    private DisplaySide displaySide = DisplaySide.FRONT;
     private boolean requiresOp = false;
     private boolean playbackPaused = false;
 
@@ -188,6 +190,39 @@ public class DisplayBlockEntity extends BlockEntity {
         return rotationZ;
     }
 
+    /**
+     * Set the screen curvature of the display, in the range [0, 1] where 0 is a
+     * flat screen and 1 is the strongest bow toward the viewer. Only used by the
+     * two web display block types; TV blocks are fixed at 0.
+     */
+    public void setCurvature(float curvature) {
+        this.curvature = Math.max(0f, Math.min(1f, curvature));
+        this.markDirty();
+    }
+
+    public float getCurvature() {
+        return curvature;
+    }
+
+    /**
+     * Set which side(s) of the display surface are rendered.
+     */
+    public void setDisplaySide(DisplaySide displaySide) {
+        this.displaySide = displaySide == null ? DisplaySide.FRONT : displaySide;
+        this.markDirty();
+    }
+
+    public DisplaySide getDisplaySide() {
+        return this.displaySide;
+    }
+
+    /** Which side of the display surface is rendered. */
+    public enum DisplaySide {
+        FRONT,
+        BACK,
+        BOTH
+    }
+
     public boolean requiresOp() {
         return requiresOp;
     }
@@ -226,6 +261,8 @@ public class DisplayBlockEntity extends BlockEntity {
         displayNbt.putFloat("rotationX", this.rotationX);
         displayNbt.putFloat("rotationY", this.rotationY);
         displayNbt.putFloat("rotationZ", this.rotationZ);
+        displayNbt.putFloat("curvature", this.curvature);
+        displayNbt.putString("displaySide", this.displaySide.name());
 
         if (this.source != null) {
             displayNbt.putString("type", this.source.getType());
@@ -323,6 +360,16 @@ public class DisplayBlockEntity extends BlockEntity {
             } else {
                 this.rotationZ = 0f;
             }
+
+            if (displayNbt.get("curvature") instanceof NbtFloat curvature) {
+                this.curvature = Math.max(0f, Math.min(1f, curvature.floatValue()));
+            } else {
+                this.curvature = 0f;
+            }
+
+            String sideName = displayNbt.getString("displaySide");
+            this.displaySide = DisplaySide.BACK.name().equals(sideName) ? DisplaySide.BACK
+                    : DisplaySide.BOTH.name().equals(sideName) ? DisplaySide.BOTH : DisplaySide.FRONT;
 
             if (displayNbt.get("type") instanceof NbtString type) {
                 this.source = DisplaySource.newSourceFromType(type.asString());

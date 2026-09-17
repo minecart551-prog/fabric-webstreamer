@@ -49,6 +49,7 @@ public class DisplayBlockScreen extends Screen {
     private static final Text ROTATION_X_TEXT = Text.translatable("gui.webstreamer.display.rotationX");
     private static final Text ROTATION_Y_TEXT = Text.translatable("gui.webstreamer.display.rotationY");
     private static final Text ROTATION_Z_TEXT = Text.translatable("gui.webstreamer.display.rotationZ");
+    private static final Text CURVATURE_TEXT = Text.translatable("gui.webstreamer.display.curvature");
     private static final Text SOURCE_TYPE_TEXT = Text.translatable("gui.webstreamer.display.sourceType");
     private static final Text SOURCE_TYPE_RAW_TEXT = Text.translatable("gui.webstreamer.display.sourceType.raw");
     private static final Text SOURCE_TYPE_TWITCH_TEXT = Text.translatable("gui.webstreamer.display.sourceType.twitch");
@@ -63,6 +64,7 @@ public class DisplayBlockScreen extends Screen {
     private static final String AUDIO_DISTANCE_TEXT_KEY = "gui.webstreamer.display.audioDistance";
     private static final String AUDIO_VOLUME_TEXT_KEY = "gui.webstreamer.display.audioVolume";
     private static final String RENDER_DISTANCE_TEXT_KEY = "gui.webstreamer.display.renderDistance";
+    private static final String VISIBLE_SIDE_TEXT_KEY = "gui.webstreamer.display.visibleSide";
 
     private static final Text ERR_PENDING = Text.translatable("gui.webstreamer.display.error.pending");
     private static final Text ERR_INVALID_SIZE = Text.translatable("gui.webstreamer.display.error.invalidSize");
@@ -95,6 +97,9 @@ public class DisplayBlockScreen extends Screen {
 
     private TextFieldWidget widthField, heightField, offsetXField, offsetYField, offsetZField;
     private RotationSliderWidget rotationXSlider, rotationYSlider, rotationZSlider;
+    private CurvatureSliderWidget curvatureSlider;
+    private DisplayBlockEntity.DisplaySide displaySide;
+    private ButtonWidget displaySideButton;
     private AudioDistanceSliderWidget renderDistanceSlider;
     private AudioDistanceSliderWidget audioDistanceSlider;
     private AudioVolumeSliderWidget audioVolumeSlider;
@@ -262,6 +267,17 @@ public class DisplayBlockScreen extends Screen {
                 rotationZSlider = new RotationSliderWidget(xHalf + 78, yTop + 41, 100, 20, rotZVal);
                 rotationZSlider.setChangedListener(val -> this.dirty = true);
                 this.addDrawableChild(rotationZSlider);
+
+                if (this.displaySide == null) {
+                    this.displaySide = this.display.getDisplaySide();
+                }
+                displaySideButton = ButtonWidget.builder(this.getDisplaySideMessage(), button -> {
+                    DisplayBlockEntity.DisplaySide[] values = DisplayBlockEntity.DisplaySide.values();
+                    this.displaySide = values[(this.displaySide.ordinal() + 1) % values.length];
+                    button.setMessage(this.getDisplaySideMessage());
+                    this.dirty = true;
+                }).dimensions(xHalf + 186, yTop + 41, 76, 20).build();
+                this.addDrawableChild(displaySideButton);
             }
 
             DisplaySource source = this.display.getSource();
@@ -310,6 +326,11 @@ public class DisplayBlockScreen extends Screen {
         audioVolumeSlider = new AudioVolumeSliderWidget(xHalf - 154, audioVolumeRowY, 150, 20, audioVolumeVal);
         audioVolumeSlider.setChangedListener(val -> this.dirty = true);
         this.addDrawableChild(audioVolumeSlider);
+
+        float curvatureVal = curvatureSlider == null ? this.display.getCurvature() : curvatureSlider.getCurvature();
+        curvatureSlider = new CurvatureSliderWidget(xHalf + 4, audioVolumeRowY, 150, 20, curvatureVal);
+        curvatureSlider.setChangedListener(val -> this.dirty = true);
+        this.addDrawableChild(curvatureSlider);
 
         int ySourceTop = yTop + 60 + rotationRowHeight + 24;
         int ySourceBottom = ySourceTop;
@@ -742,6 +763,10 @@ public class DisplayBlockScreen extends Screen {
         }
     }
 
+    private Text getDisplaySideMessage() {
+        return Text.translatable(VISIBLE_SIDE_TEXT_KEY + "." + this.displaySide.name().toLowerCase());
+    }
+
     /**
      * Internal function to refresh the state of the "done" button, to activate it only if inputs are valid.
      * @param commit Set to true in order to commit these changes to the display block entity and send an update.
@@ -893,6 +918,14 @@ public class DisplayBlockScreen extends Screen {
             float rotY = this.fixedScaleOffset ? 0f : this.rotationYSlider.getRotation();
             float rotZ = this.fixedScaleOffset ? 0f : this.rotationZSlider.getRotation();
             this.display.setRotation(rotX, rotY, rotZ);
+
+            float curvature = this.fixedScaleOffset ? 0f : this.curvatureSlider.getCurvature();
+            this.display.setCurvature(curvature);
+
+            DisplayBlockEntity.DisplaySide side = this.displaySide == null ? DisplayBlockEntity.DisplaySide.FRONT : this.displaySide;
+            if (!this.fixedScaleOffset) {
+                this.display.setDisplaySide(side);
+            }
 
             if (sourceType == SourceType.RAW) {
                 if (rawUri != null && rawUri.getScheme() == null) {
@@ -1332,6 +1365,39 @@ public class DisplayBlockScreen extends Screen {
         @Override
         protected void applyValue() {
             this.changedListener.accept(this.getRotation());
+        }
+
+    }
+
+    /**
+     * Custom slider widget for screen curvature (0 to 1).
+     */
+    private static class CurvatureSliderWidget extends SliderWidget {
+
+        private Consumer<Float> changedListener;
+
+        public CurvatureSliderWidget(int x, int y, int width, int height, float value) {
+            super(x, y, width, height, Text.empty(), Math.max(0f, Math.min(1f, value)));
+            this.updateMessage();
+        }
+
+        public void setChangedListener(Consumer<Float> changedListener) {
+            this.changedListener = changedListener;
+        }
+
+        public float getCurvature() {
+            return (float) this.value;
+        }
+
+        @Override
+        protected void updateMessage() {
+            int percent = (int) Math.round(this.getCurvature() * 100.0);
+            this.setMessage(CURVATURE_TEXT.copy().append(": ").append(Text.literal(percent + "%")));
+        }
+
+        @Override
+        protected void applyValue() {
+            this.changedListener.accept(this.getCurvature());
         }
 
     }

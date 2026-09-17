@@ -64,6 +64,9 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
     private static final Quaternionf ROTATE_FLOOR = new Quaternionf(new AxisAngle4d(Math.PI / 2.0, 1.0, 0.0, 0.0));
     private static final Quaternionf ROTATE_CEILING = new Quaternionf(new AxisAngle4d(Math.PI / 2.0 * 3.0, 1.0, 0.0, 0.0));
 
+    /** Number of vertical strips a curved display is tessellated into. */
+    private static final int CURVATURE_SEGMENTS = 48;
+
     private final GameRenderer gameRenderer = MinecraftClient.getInstance().gameRenderer;
     private final TextRenderer textRenderer;
 
@@ -340,10 +343,26 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
                 float quadZ = isTV ? 0.01f : -0.55f;
 
                 Matrix4f positionMatrix = matrices.peek().getPositionMatrix();
-                buffer.vertex(positionMatrix,  hw, -hh, quadZ).texture(0, 1).next();
-                buffer.vertex(positionMatrix, -hw, -hh, quadZ).texture(1, 1).next();
-                buffer.vertex(positionMatrix, -hw,  hh, quadZ).texture(1, 0).next();
-                buffer.vertex(positionMatrix,  hw,  hh, quadZ).texture(0, 0).next();
+
+                float curvature = entity.getCurvature();
+                DisplayBlockEntity.DisplaySide displaySide = entity.getDisplaySide();
+                boolean drawFront = displaySide == DisplayBlockEntity.DisplaySide.FRONT || displaySide == DisplayBlockEntity.DisplaySide.BOTH;
+                boolean drawBack = displaySide == DisplayBlockEntity.DisplaySide.BACK || displaySide == DisplayBlockEntity.DisplaySide.BOTH;
+
+                if (drawFront) {
+                    if (curvature <= 0f) {
+                        emitFlatDisplayQuad(buffer, positionMatrix, hw, hh, quadZ, true);
+                    } else {
+                        drawCurvedDisplay(buffer, positionMatrix, w, hh, quadZ, curvature, true);
+                    }
+                }
+                if (drawBack) {
+                    if (curvature <= 0f) {
+                        emitFlatDisplayQuad(buffer, positionMatrix, hw, hh, quadZ, false);
+                    } else {
+                        drawCurvedDisplay(buffer, positionMatrix, w, hh, quadZ, curvature, false);
+                    }
+                }
 
             } catch (DisplayLayerNode.OutOfLayerException e) {
                 statusText = NO_LAYER_AVAILABLE_TEXT;
@@ -371,6 +390,82 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
         }
 
         matrices.pop();
+
+    }
+
+    /**
+     * Emit a single flat display quad, with the texture and vertex order matching
+     * the original display render. When {@code front} is false, the winding is
+     * reversed so the quad is only visible from the back side.
+     */
+    private static void emitFlatDisplayQuad(VertexConsumer buffer, Matrix4f positionMatrix,
+                                            float hw, float hh, float quadZ, boolean front) {
+
+        if (front) {
+            buffer.vertex(positionMatrix,  hw, -hh, quadZ).texture(0, 1).next();
+            buffer.vertex(positionMatrix, -hw, -hh, quadZ).texture(1, 1).next();
+            buffer.vertex(positionMatrix, -hw,  hh, quadZ).texture(1, 0).next();
+            buffer.vertex(positionMatrix,  hw,  hh, quadZ).texture(0, 0).next();
+        } else {
+            buffer.vertex(positionMatrix,  hw,  hh, quadZ).texture(0, 0).next();
+            buffer.vertex(positionMatrix, -hw,  hh, quadZ).texture(1, 0).next();
+            buffer.vertex(positionMatrix, -hw, -hh, quadZ).texture(1, 1).next();
+            buffer.vertex(positionMatrix,  hw, -hh, quadZ).texture(0, 1).next();
+        }
+
+    }
+
+    /**
+     * Emit the display quad tessellated into vertical strips bent along a
+     * circular arc. The two edges stay on the original {@code quadZ} plane while
+     * the center of the screen bows out of it. Curvature maps to the wrap angle
+     * (0 = flat, 1 = a full cylinder), so at curvature 1 the left and right
+     * borders travel all the way around and touch each other at the center of
+     * the screen. Each strip is a single 4-vertex quad written in the same order
+     * as the flat display quad, to match the render layer's buffer draw mode.
+     * When {@code front} is false, the winding is reversed so the surface is only
+     * visible from the back side.
+     */
+    private static void drawCurvedDisplay(VertexConsumer buffer, Matrix4f positionMatrix,
+                                          float w, float hh, float quadZ, float curvature, boolean front) {
+
+        float wrapAngle = (float) (Math.PI * 2.0 * curvature);
+        float radius = w / wrapAngle;
+        float cosHalf = (float) Math.cos(wrapAngle / 2.0);
+
+        for (int i = 0; i < CURVATURE_SEGMENTS; ++i) {
+            float t0 = (float) i / CURVATURE_SEGMENTS;
+            float t1 = (float) (i + 1) / CURVATURE_SEGMENTS;
+
+            // Angle offset from the center of the screen (t = 0.5).
+            float a0 = wrapAngle * (t0 - 0.5f);
+            float a1 = wrapAngle * (t1 - 0.5f);
+
+            float x0 = radius * (float) Math.sin(a0);
+            float x1 = radius * (float) Math.sin(a1);
+
+            // Center of the screen bows out by radius * (1 - cos(wrapAngle/2));
+            // the two edges (t = 0 and t = 1) meet on the quadZ plane when the
+            // wrap angle reaches a full turn.
+            float z0 = quadZ - radius * ((float) Math.cos(a0) - cosHalf);
+            float z1 = quadZ - radius * ((float) Math.cos(a1) - cosHalf);
+
+            // Texture U increases toward the left edge, matching the flat quad.
+            float texU0 = 1f - t0;
+            float texU1 = 1f - t1;
+
+            if (front) {
+                buffer.vertex(positionMatrix, x1, -hh, z1).texture(texU1, 1).next();
+                buffer.vertex(positionMatrix, x0, -hh, z0).texture(texU0, 1).next();
+                buffer.vertex(positionMatrix, x0,  hh, z0).texture(texU0, 0).next();
+                buffer.vertex(positionMatrix, x1,  hh, z1).texture(texU1, 0).next();
+            } else {
+                buffer.vertex(positionMatrix, x1,  hh, z1).texture(texU1, 0).next();
+                buffer.vertex(positionMatrix, x0,  hh, z0).texture(texU0, 0).next();
+                buffer.vertex(positionMatrix, x0, -hh, z0).texture(texU0, 1).next();
+                buffer.vertex(positionMatrix, x1, -hh, z1).texture(texU1, 1).next();
+            }
+        }
 
     }
 

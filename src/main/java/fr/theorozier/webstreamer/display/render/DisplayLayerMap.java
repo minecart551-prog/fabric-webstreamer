@@ -207,6 +207,7 @@ public abstract class DisplayLayerMap<K> implements DisplayLayerNode {
         // budget that could serve another display.
         if (layer instanceof DisplayLayerVideo videoLayer && videoLayer.isPermanentlyFailed()) {
             WebStreamerMod.LOGGER.info("Rebuilding permanently failed video layer for {}", key.uri());
+            key.display().markRenderDataSourceDirty();
             this.removeLayer(layerKey, layer);
             this.pendingCleanups.add(layer);
             layer = null;
