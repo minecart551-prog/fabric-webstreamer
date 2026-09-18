@@ -300,7 +300,7 @@ public class DisplayBlockEntityRenderer implements BlockEntityRenderer<DisplayBl
                 layer.setPlaybackPaused(entity.isPlaybackPaused());
                 if (layer instanceof DisplayLayerSimple simpleLayer) {
                     simpleLayer.setInRange(inRange);
-                    simpleLayer.setBrightness(entity.getBrightness());
+                    simpleLayer.setBrightness(WebStreamerClientMod.isShaderActive() ? entity.getBrightness() : 1.0f);
                     // When visible-upload-only is disabled, always treat the layer
                     // as on screen so uploads are never gated.
                     boolean onScreen = !WebStreamerConfig.isVisibleUploadOnly() || this.isDisplayOnScreen(entity);

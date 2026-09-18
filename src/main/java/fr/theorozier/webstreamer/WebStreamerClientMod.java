@@ -8,9 +8,12 @@ import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.fabricmc.fabric.api.blockrenderlayer.v1.BlockRenderLayerMap;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.render.block.entity.BlockEntityRendererFactories;
 import net.minecraft.client.render.RenderLayer;
 import fr.theorozier.webstreamer.youtube.YoutubeClient;
+
+import java.lang.reflect.Method;
 
 @Environment(EnvType.CLIENT)
 public class WebStreamerClientMod implements ClientModInitializer {
@@ -18,6 +21,36 @@ public class WebStreamerClientMod implements ClientModInitializer {
     public static DisplayLayerManager DISPLAY_LAYERS;
     public static TwitchClient TWITCH_CLIENT;
     public static YoutubeClient YOUTUBE_CLIENT;
+
+    private static boolean irisLoaded = false;
+    private static Object irisApiInstance = null;
+    private static Method isShaderPackInUseMethod = null;
+    private static boolean irisCheckDone = false;
+
+    public static boolean isShaderActive() {
+        if (!irisCheckDone) {
+            irisCheckDone = true;
+            irisLoaded = FabricLoader.getInstance().isModLoaded("iris");
+            if (irisLoaded) {
+                try {
+                    Class<?> cls = Class.forName("net.irisshaders.iris.api.v0.IrisApi");
+                    Object instance = cls.getMethod("getInstance").invoke(null);
+                    if (instance != null) {
+                        irisApiInstance = instance;
+                        isShaderPackInUseMethod = cls.getMethod("isShaderPackInUse");
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
+        if (!irisLoaded || irisApiInstance == null || isShaderPackInUseMethod == null) {
+            return false;
+        }
+        try {
+            return (Boolean) isShaderPackInUseMethod.invoke(irisApiInstance);
+        } catch (Exception e) {
+            return false;
+        }
+    }
 
     @Override
     public void onInitializeClient() {
