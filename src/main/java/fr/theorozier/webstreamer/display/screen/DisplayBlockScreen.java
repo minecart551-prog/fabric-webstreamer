@@ -64,6 +64,7 @@ public class DisplayBlockScreen extends Screen {
     private static final String AUDIO_DISTANCE_TEXT_KEY = "gui.webstreamer.display.audioDistance";
     private static final String AUDIO_VOLUME_TEXT_KEY = "gui.webstreamer.display.audioVolume";
     private static final String RENDER_DISTANCE_TEXT_KEY = "gui.webstreamer.display.renderDistance";
+    private static final String BRIGHTNESS_TEXT_KEY = "gui.webstreamer.display.brightness";
     private static final String VISIBLE_SIDE_TEXT_KEY = "gui.webstreamer.display.visibleSide";
 
     private static final Text ERR_PENDING = Text.translatable("gui.webstreamer.display.error.pending");
@@ -98,6 +99,7 @@ public class DisplayBlockScreen extends Screen {
     private TextFieldWidget widthField, heightField, offsetXField, offsetYField, offsetZField;
     private RotationSliderWidget rotationXSlider, rotationYSlider, rotationZSlider;
     private CurvatureSliderWidget curvatureSlider;
+    private BrightnessSliderWidget brightnessSlider;
     private DisplayBlockEntity.DisplaySide displaySide;
     private ButtonWidget displaySideButton;
     private AudioDistanceSliderWidget renderDistanceSlider;
@@ -328,9 +330,14 @@ public class DisplayBlockScreen extends Screen {
         this.addDrawableChild(audioVolumeSlider);
 
         float curvatureVal = curvatureSlider == null ? this.display.getCurvature() : curvatureSlider.getCurvature();
-        curvatureSlider = new CurvatureSliderWidget(xHalf + 4, audioVolumeRowY, 150, 20, curvatureVal);
+        curvatureSlider = new CurvatureSliderWidget(xHalf + 4, audioVolumeRowY, 73, 20, curvatureVal);
         curvatureSlider.setChangedListener(val -> this.dirty = true);
         this.addDrawableChild(curvatureSlider);
+
+        float brightnessVal = brightnessSlider == null ? this.display.getBrightness() : brightnessSlider.getBrightness();
+        brightnessSlider = new BrightnessSliderWidget(xHalf + 81, audioVolumeRowY, 73, 20, brightnessVal);
+        brightnessSlider.setChangedListener(val -> this.dirty = true);
+        this.addDrawableChild(brightnessSlider);
 
         int ySourceTop = yTop + 60 + rotationRowHeight + 24;
         int ySourceBottom = ySourceTop;
@@ -922,6 +929,9 @@ public class DisplayBlockScreen extends Screen {
             float curvature = this.fixedScaleOffset ? 0f : this.curvatureSlider.getCurvature();
             this.display.setCurvature(curvature);
 
+            float brightness = this.brightnessSlider.getBrightness();
+            this.display.setBrightness(brightness);
+
             DisplayBlockEntity.DisplaySide side = this.displaySide == null ? DisplayBlockEntity.DisplaySide.FRONT : this.displaySide;
             if (!this.fixedScaleOffset) {
                 this.display.setDisplaySide(side);
@@ -1398,6 +1408,39 @@ public class DisplayBlockScreen extends Screen {
         @Override
         protected void applyValue() {
             this.changedListener.accept(this.getCurvature());
+        }
+
+    }
+
+    /**
+     * Custom slider widget for display brightness (0 to 1).
+     */
+    private static class BrightnessSliderWidget extends SliderWidget {
+
+        private Consumer<Float> changedListener;
+
+        public BrightnessSliderWidget(int x, int y, int width, int height, float value) {
+            super(x, y, width, height, Text.empty(), Math.max(0f, Math.min(1f, value)));
+            this.updateMessage();
+        }
+
+        public void setChangedListener(Consumer<Float> changedListener) {
+            this.changedListener = changedListener;
+        }
+
+        public float getBrightness() {
+            return (float) this.value;
+        }
+
+        @Override
+        protected void updateMessage() {
+            int percent = (int) Math.round(this.getBrightness() * 100.0);
+            this.setMessage(Text.translatable(BRIGHTNESS_TEXT_KEY).append(": ").append(Text.literal(percent + "%")));
+        }
+
+        @Override
+        protected void applyValue() {
+            this.changedListener.accept(this.getBrightness());
         }
 
     }

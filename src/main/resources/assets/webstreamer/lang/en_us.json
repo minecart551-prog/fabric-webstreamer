@@ -14,6 +14,7 @@
   "gui.webstreamer.display.rotationY": "Rot Y",
   "gui.webstreamer.display.rotationZ": "Rot Z",
   "gui.webstreamer.display.curvature": "Curvature",
+  "gui.webstreamer.display.brightness": "Brightness",
   "gui.webstreamer.display.visibleSide.front": "Visible: Front",
   "gui.webstreamer.display.visibleSide.back": "Visible: Back",
   "gui.webstreamer.display.visibleSide.both": "Visible: Both",

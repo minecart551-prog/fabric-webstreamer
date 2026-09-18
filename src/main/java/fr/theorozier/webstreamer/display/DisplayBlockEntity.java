@@ -68,6 +68,7 @@ public class DisplayBlockEntity extends BlockEntity {
     private float rotationY = 0f;
     private float rotationZ = 0f;
     private float curvature = 0f;
+    private float brightness = 1f;
     private DisplaySide displaySide = DisplaySide.FRONT;
     private boolean requiresOp = false;
     private boolean playbackPaused = false;
@@ -205,6 +206,19 @@ public class DisplayBlockEntity extends BlockEntity {
     }
 
     /**
+     * Set the display brightness, in the range [0, 1] where 0 is completely
+     * dark and 1 is full brightness.
+     */
+    public void setBrightness(float brightness) {
+        this.brightness = Math.max(0f, Math.min(1f, brightness));
+        this.markDirty();
+    }
+
+    public float getBrightness() {
+        return brightness;
+    }
+
+    /**
      * Set which side(s) of the display surface are rendered.
      */
     public void setDisplaySide(DisplaySide displaySide) {
@@ -262,6 +276,7 @@ public class DisplayBlockEntity extends BlockEntity {
         displayNbt.putFloat("rotationY", this.rotationY);
         displayNbt.putFloat("rotationZ", this.rotationZ);
         displayNbt.putFloat("curvature", this.curvature);
+        displayNbt.putFloat("brightness", this.brightness);
         displayNbt.putString("displaySide", this.displaySide.name());
 
         if (this.source != null) {
@@ -365,6 +380,12 @@ public class DisplayBlockEntity extends BlockEntity {
                 this.curvature = Math.max(0f, Math.min(1f, curvature.floatValue()));
             } else {
                 this.curvature = 0f;
+            }
+
+            if (displayNbt.get("brightness") instanceof NbtFloat brightness) {
+                this.brightness = Math.max(0f, Math.min(1f, brightness.floatValue()));
+            } else {
+                this.brightness = 1f;
             }
 
             String sideName = displayNbt.getString("displaySide");

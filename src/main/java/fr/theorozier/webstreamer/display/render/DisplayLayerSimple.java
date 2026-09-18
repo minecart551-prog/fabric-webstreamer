@@ -53,6 +53,9 @@ public abstract class DisplayLayerSimple implements DisplayLayerNode, DisplayLay
 	 */
 	private static final int VISIBILITY_FRAME_TOLERANCE = 2;
 
+	/** Brightness multiplier [0,1] applied via ColorModulator in the render layer setup. */
+	private volatile float brightness = 1f;
+
 	// Allow subclasses and this class to check destroyed state
 	protected boolean destroyed = false;
 
@@ -67,6 +70,14 @@ public abstract class DisplayLayerSimple implements DisplayLayerNode, DisplayLay
 
 	public boolean isInRange() {
 		return this.inRange;
+	}
+
+	public void setBrightness(float brightness) {
+		this.brightness = brightness;
+	}
+
+	public float getBrightness() {
+		return this.brightness;
 	}
 
 	/**
@@ -172,11 +183,16 @@ public abstract class DisplayLayerSimple implements DisplayLayerNode, DisplayLay
 					() -> {
 						layer.lastUse = System.nanoTime();
 						RenderPhase.POSITION_TEXTURE_PROGRAM.startDrawing();
+						float b = layer.brightness;
+						RenderSystem.setShaderColor(b, b, b, 1.0f);
 						RenderSystem.enableDepthTest();
 						RenderSystem.depthFunc(GL11.GL_LEQUAL);
 						RenderSystem.setShaderTexture(0, layer.tex.getGlId());
 					},
-					RenderSystem::disableDepthTest);
+					() -> {
+						RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
+						RenderSystem.disableDepthTest();
+					});
 		}
 	}
 	
