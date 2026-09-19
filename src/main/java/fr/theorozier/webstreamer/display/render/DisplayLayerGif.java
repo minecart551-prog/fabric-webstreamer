@@ -140,6 +140,30 @@ public class DisplayLayerGif extends DisplayLayerSimple {
         return this.grabberFailed && this.restartAttempts >= MAX_RESTART_RETRIES;
     }
 
+    public boolean isGrabberFailed() {
+        return this.grabberFailed;
+    }
+
+    public boolean isGrabberReady() {
+        return this.grabberReady;
+    }
+
+    public boolean isGrabberPending() {
+        return this.grabberPending;
+    }
+
+    public boolean isDecodeFinished() {
+        return this.decodeFinished;
+    }
+
+    public int getFailedGrabs() {
+        return this.failedGrabs;
+    }
+
+    public int getRestartAttempts() {
+        return this.restartAttempts;
+    }
+
     private void startSetup() {
         this.decodeThread = new Thread(() -> {
             try {
@@ -407,7 +431,7 @@ public class DisplayLayerGif extends DisplayLayerSimple {
             return;
         }
 
-        if (!this.grabberPending && !this.grabberReady) {
+        if (!this.grabberPending && !this.grabberReady && !this.decodeFinished) {
             this.grabberPending = true;
             this.startSetup();
             return;

@@ -186,6 +186,30 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         return this.grabberFailed && this.restartAttempts >= MAX_RESTART_RETRIES;
     }
 
+    public boolean isGrabberFailed() {
+        return this.grabberFailed;
+    }
+
+    public boolean isGrabberPending() {
+        return this.grabberPending;
+    }
+
+    public boolean isDecodeFinished() {
+        return this.decodeFinished;
+    }
+
+    public int getFailedGrabs() {
+        return this.failedGrabs;
+    }
+
+    public int getRestartAttempts() {
+        return this.restartAttempts;
+    }
+
+    public boolean isInternalPaused() {
+        return this.paused;
+    }
+
     @Override
     public void setPlaybackPaused(boolean paused) {
         this.externalPaused = paused;

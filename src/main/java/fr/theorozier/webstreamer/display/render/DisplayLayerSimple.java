@@ -40,8 +40,13 @@ public abstract class DisplayLayerSimple implements DisplayLayerNode, DisplayLay
 	 * {@link #updateVisibility(int)} when the display stops being rendered, so
 	 * frame uploads are skipped while nobody is looking at the display — while
 	 * decode and audio keep running in the background.
+	 * <p>Written on the render thread and read from background decode threads
+	 * (e.g. {@code DisplayLayerGif.shouldDecode()}), so it must be volatile.
+	 * A stale false read here makes the GIF decode loop sleep forever after
+	 * the display comes into view, leaving the texture never uploaded (blank
+	 * display until the block is broken and replaced).</p>
 	 */
-	private boolean visible = false;
+	private volatile boolean visible = false;
 
 	/** Visibility last reported by the block-entity renderer, and the frame it was reported in. */
 	private boolean seenVisible = false;

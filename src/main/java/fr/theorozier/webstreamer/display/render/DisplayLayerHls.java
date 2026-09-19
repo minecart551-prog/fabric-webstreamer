@@ -509,6 +509,14 @@ public class DisplayLayerHls extends DisplayLayerSimple {
 	public boolean isLost() {
 		return this.playlistConsecutiveFailedRequest >= 3;
 	}
+
+	public int getPlaylistConsecutiveFailedRequest() {
+		return this.playlistConsecutiveFailedRequest;
+	}
+
+	public int getSegmentIndex() {
+		return this.segmentIndex;
+	}
 	
 	/*private static void print(ProfileResult res, String path, int indent) {
 		for (ProfilerTiming timing : res.getTimings(path)) {
