@@ -45,6 +45,9 @@ public class YoutubeDisplaySource extends DisplaySource {
      */
     private volatile URI preparedNextUri = null;
 
+    /** Guard to prevent spawning multiple concurrent prefetch threads. */
+    private volatile boolean prefetchRunning = false;
+
     /**
      * The original user input used to create this source. For playlist URLs, this
      * allows the UI to display the original URL instead of a huge comma-separated list.
@@ -197,9 +200,10 @@ public class YoutubeDisplaySource extends DisplaySource {
      * needs it on the render thread.
      */
     public void prepareNextVideo() {
-        if (!hasPlaylist()) {
+        if (!hasPlaylist() || this.prefetchRunning) {
             return;
         }
+        this.prefetchRunning = true;
         int nextIndex;
         if (this.shuffle) {
             if (this.videoIds.size() == 1) {
@@ -224,10 +228,22 @@ public class YoutubeDisplaySource extends DisplaySource {
                 }
             } catch (Exception e) {
                 WebStreamerConfig.debugWarn("Pre-fetch failed for '{}': {}", nextId, e.getMessage());
+            } finally {
+                this.prefetchRunning = false;
             }
         }, "yt-prefetch-" + nextId);
         prefetch.setDaemon(true);
         prefetch.start();
+    }
+
+    /**
+     * Check whether the pre-resolved URI for the next video is available
+     * without consuming it. Used by the render thread to avoid blocking on
+     * HTTP — if this returns {@code false}, the caller should wait and retry
+     * instead of falling back to a synchronous {@link #getUri()} call.
+     */
+    public boolean hasPreparedNextUri() {
+        return this.preparedNextUri != null;
     }
 
     /**

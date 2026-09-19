@@ -506,18 +506,39 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         this.grabberPending = false;
     }
 
-    private boolean tryRestartNextVideo() {
+    /**
+     * Attempt to advance to the next video in a playlist.
+     *
+     * <p><b>Must never perform synchronous HTTP.</b> If the next video's URI
+     * has not been pre-fetched yet, returns {@code WAITING} so the caller can
+     * keep the display alive and retry on the next tick.</p>
+     *
+     * @return {@code RESTARTED} if the grabber was restarted with the next
+     *         video, {@code WAITING} if the prefetch is not yet ready, or
+     *         {@code NO_PLAYLIST} if there is no playlist or advancement is
+     *         not possible.
+     */
+    private static final int RESTART_RESTARTED = 1;
+    private static final int RESTART_WAITING = -1;
+    private static final int RESTART_NO_PLAYLIST = 0;
+
+    private int tryRestartNextVideo() {
         // Try YoutubeDisplaySource playlist
         if (this.display != null && this.display.getSource() instanceof YoutubeDisplaySource youtubeSource) {
+            if (!youtubeSource.hasPlaylist()) {
+                return RESTART_NO_PLAYLIST;
+            }
+            if (!youtubeSource.hasPreparedNextUri()) {
+                // Prefetch not ready — make sure it is running, then wait.
+                youtubeSource.prepareNextVideo();
+                return RESTART_WAITING;
+            }
             if (!youtubeSource.advanceVideo()) {
-                return false;
+                return RESTART_NO_PLAYLIST;
             }
             URI nextUri = youtubeSource.consumePreparedNextUri();
             if (nextUri == null) {
-                nextUri = youtubeSource.getUri();
-            }
-            if (nextUri == null) {
-                return false;
+                return RESTART_NO_PLAYLIST;
             }
             DisplayNetworking.sendDisplayUpdate(this.display);
             WebStreamerConfig.debugLog(makeLog("Restarting YouTube playlist with next video {}"), youtubeSource.getCurrentVideoId());
@@ -539,20 +560,24 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             this.decodeFinished = false;
             this.grabberPending = true;
             this.startSetup();
-            return true;
+            return RESTART_RESTARTED;
         }
 
         // Try ServerDisplaySource playlist
         if (this.display != null && this.display.getSource() instanceof ServerDisplaySource serverSource) {
+            if (!serverSource.hasPlaylist()) {
+                return RESTART_NO_PLAYLIST;
+            }
+            if (!serverSource.hasPreparedNextUri()) {
+                serverSource.prepareNextVideo();
+                return RESTART_WAITING;
+            }
             if (!serverSource.advanceVideo()) {
-                return false;
+                return RESTART_NO_PLAYLIST;
             }
             URI nextUri = serverSource.consumePreparedNextUri();
             if (nextUri == null) {
-                nextUri = serverSource.getUri();
-            }
-            if (nextUri == null) {
-                return false;
+                return RESTART_NO_PLAYLIST;
             }
             DisplayNetworking.sendDisplayUpdate(this.display);
             WebStreamerConfig.debugLog(makeLog("Restarting server playlist with next video {}"), serverSource.getCurrentVideoId());
@@ -574,10 +599,10 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             this.decodeFinished = false;
             this.grabberPending = true;
             this.startSetup();
-            return true;
+            return RESTART_RESTARTED;
         }
 
-        return false;
+        return RESTART_NO_PLAYLIST;
     }
 
     private void loopVideo() {
@@ -792,7 +817,8 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                     this.audioSource.playFrom(this.refTimestamp + this.playbackMicros);
                 }
 
-                if (this.tryRestartNextVideo()) {
+                int restartResult = this.tryRestartNextVideo();
+                if (restartResult == RESTART_RESTARTED) {
                     // Pre-fetch the next video after this one
                     if (this.display != null) {
                         if (this.display.getSource() instanceof YoutubeDisplaySource ytSource && ytSource.hasPlaylist()) {
@@ -801,6 +827,11 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                             srvSource.prepareNextVideo();
                         }
                     }
+                    return;
+                } else if (restartResult == RESTART_WAITING) {
+                    // Prefetch not ready yet — keep the display alive showing
+                    // the last frame and retry on the next tick. Do NOT stop
+                    // the grabber or the audio source.
                     return;
                 }
                 WebStreamerMod.LOGGER.info(makeLog("Reached end of video."));
