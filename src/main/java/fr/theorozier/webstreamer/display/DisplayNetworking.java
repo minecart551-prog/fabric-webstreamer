@@ -263,7 +263,18 @@ public class DisplayNetworking {
             if (blockEntity.isPlaybackPaused() != paused) {
                 blockEntity.setPlaybackPaused(paused);
                 blockEntity.markDirty();
-                world.updateListeners(pos, blockEntity.getCachedState(), blockEntity.getCachedState(), Block.NOTIFY_ALL);
+                // Explicitly send the block entity NBT to tracking clients so
+                // they see the updated playbackPaused value immediately.  The
+                // plain markDirty()+updateListeners() path only marks the chunk
+                // dirty; the block entity update is deferred until the next full
+                // chunk sync, which can leave the client stuck reading a stale
+                // playbackPaused=true and refusing to play.
+                var packet = blockEntity.toUpdatePacket();
+                if (packet != null) {
+                    for (var player : net.fabricmc.fabric.api.networking.v1.PlayerLookup.tracking(world, pos)) {
+                        player.networkHandler.sendPacket(packet);
+                    }
+                }
             }
         }
     }
