@@ -99,11 +99,14 @@ def nativeDir = file("native")
 def nativeBuildDir = file("native/target/release")
 def nativeOutputDir = file("src/main/resources/natives")
 
+def ffmpegDir = System.getenv("FFMPEG_DIR") ?: "C:\\ffmpeg\\ffmpeg-6.1-dev\\ffmpeg-n6.1.3-win64-gpl-shared-6.1"
+
 task buildNative(type: Exec) {
 	description = 'Build the Rust native library with cargo'
 	group = 'native'
 	workingDir nativeDir
 	commandLine 'cargo', 'build', '--release', '--lib'
+	environment 'FFMPEG_DIR', ffmpegDir
 
 	// Only run if native source files have changed
 	inputs.dir nativeDir
@@ -115,9 +118,8 @@ task copyNative(type: Copy, dependsOn: buildNative) {
 	description = 'Copy the built native library to resources'
 	group = 'native'
 	from(nativeBuildDir) {
-		include nativeLibName
-		include "libwebstreamer_lav${nativeExt}"
 		include "webstreamer_lav${nativeExt}"
+		include "libwebstreamer_lav${nativeExt}"
 	}
 	into nativeOutputDir
 	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
@@ -125,6 +127,8 @@ task copyNative(type: Copy, dependsOn: buildNative) {
 
 // Make the jar task depend on native build
 jar.dependsOn copyNative
+processResources.dependsOn copyNative
+sourcesJar.dependsOn copyNative
 
 publishing {
 	publications {

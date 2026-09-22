@@ -1171,6 +1171,7 @@ dependencies = [
  "anyhow",
  "env_logger",
  "ffmpeg-next",
+ "ffmpeg-sys-next",
  "jni",
  "log",
  "num_cpus",

@@ -3,6 +3,8 @@ package fr.theorozier.webstreamer.display.render;
 import fr.theorozier.webstreamer.WebStreamerMod;
 import fr.theorozier.webstreamer.display.DisplayBlockEntity;
 import fr.theorozier.webstreamer.display.DisplayNetworking;
+import fr.theorozier.webstreamer.jni.NativeFrameGrabber;
+import fr.theorozier.webstreamer.jni.NativeLibrary;
 import fr.theorozier.webstreamer.util.FFmpegLibrary;
 import fr.theorozier.webstreamer.util.WebStreamerConfig;
 import fr.theorozier.webstreamer.display.audio.AudioStreamingBuffer;
@@ -48,6 +50,11 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             "AppleWebKit/537.36 (KHTML, like Gecko) " +
             "Chrome/120.0.0.0 Safari/537.36";
 
+    // Native decode path
+    private NativeFrameGrabber nativeGrabber;
+    private boolean useNative = false;
+
+    // JavaCV decode path
     private FFmpegFrameGrabber grabber;
     private boolean grabberPending = false;
     private volatile boolean grabberReady   = false;
@@ -123,14 +130,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         this.display = key.display();
         this.currentUri = key.uri();
         this.audioSource = new AudioStreamingSource(this.makeLog("audio"));
-        // Default the audio source to this display's own location. A layer that
-        // is (re)created around a playlist transition can start decoding and
-        // queue audio before the renderer ever calls pushAudioSource() (it only
-        // runs from render() while the display is being rendered, e.g. the
-        // player turned away as the playlist advanced and the layer was
-        // re-keyed on the new URI). Without these defaults the fresh source
-        // sits at the world origin — distance-attenuated to silence until the
-        // player happens to look back and pushAudioSource() re-positions it.
         if (this.display != null) {
             this.audioSource.setPosition(this.display.getPos());
             this.audioSource.setAttenuation(this.display.getAudioDistance());
@@ -143,12 +142,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         return 30;
     }
 
-    /**
-     * The URI this layer is currently decoding, updated by
-     * {@link #tryRestartNextVideo()} when a playlist advances. Used by the layer
-     * manager to re-key the layer to the display's resolved URI instead of
-     * rebuilding it mid-transition.
-     */
     public URI getCurrentUri() {
         return this.currentUri;
     }
@@ -173,15 +166,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         return this.grabberFailed;
     }
 
-    /**
-     * Whether this layer failed to open/decode and its bounded auto-restart
-     * attempts are exhausted. A permanently failed layer should be released and
-     * rebuilt by the manager (with a possibly re-resolved URI) instead of being
-     * returned forever: for fixed URLs (raw/server/m3u8) re-resolution yields
-     * the same URI, so the renderer's {@code resetSourceUri()} path would
-     * otherwise return this same dead layer every frame — blank display that
-     * only recovers when the block is broken and replaced.
-     */
     public boolean isPermanentlyFailed() {
         return this.grabberFailed && this.restartAttempts >= MAX_RESTART_RETRIES;
     }
@@ -241,9 +225,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         if (this.destroyed) {
             return;
         }
-        // Out of range audio is muted, not stopped, so that the audio pipeline
-        // keeps streaming continuously and re-entering the range doesn't require
-        // a costly/glitchy rebuild of the OpenAL source.
         this.audioInRange = audioDistance > 0f && dist <= audioDistance;
         this.audioSource.setPosition(pos);
         this.audioSource.setAttenuation(audioDistance);
@@ -251,14 +232,126 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     }
 
     // -------------------------------------------------------------------------
-    // Grabber
+    // Grabber — native path
     // -------------------------------------------------------------------------
 
-    private void startGrabberAsync() {
+    private void startNativeGrabber() {
+        if (this.destroyed || !NativeLibrary.isAvailable()) {
+            return;
+        }
+
+        try {
+            NativeFrameGrabber ng = new NativeFrameGrabber();
+            if (!ng.open(this.currentUri)) {
+                WebStreamerMod.LOGGER.info(makeLog("Native grabber failed to open, falling back to JavaCV"));
+                ng.close();
+                startJavaCVGrabberAsync();
+                return;
+            }
+
+            // Enable rolling packet cache for seeking (30s, 32MB)
+            ng.enableCache(30_000_000L, 32 * 1024 * 1024);
+
+            if (this.destroyed) {
+                ng.close();
+                return;
+            }
+
+            this.nativeGrabber = ng;
+            this.useNative = true;
+            this.refTimestamp = 0;
+            this.playbackMicros = 0;
+            this.lastTickNanos = System.nanoTime();
+            this.lastDecodedAudioTs = 0;
+            this.grabberReady = true;
+            this.grabberPending = false;
+            this.failedGrabs = 0;
+            this.restartAttempts = 0;
+            this.lastRestartAttemptNanos = 0;
+
+            WebStreamerMod.LOGGER.info(makeLog("Native decoder opened for {}"), this.currentUri);
+
+            // Pre-fetch next playlist video
+            if (this.display != null) {
+                if (this.display.getSource() instanceof YoutubeDisplaySource ytSource && ytSource.hasPlaylist()) {
+                    ytSource.prepareNextVideo();
+                } else if (this.display.getSource() instanceof ServerDisplaySource srvSource && srvSource.hasPlaylist()) {
+                    srvSource.prepareNextVideo();
+                }
+            }
+
+        } catch (Throwable e) {
+            WebStreamerMod.LOGGER.error(makeLog("Failed to start native decoder"), e);
+            this.grabberFailed = true;
+            this.grabberPending = false;
+        }
+    }
+
+    private void tickNative() {
+        long now = System.nanoTime();
+
+        boolean shouldPause = this.externalPaused;
+        if (this.lastTickNanos > 0 && !shouldPause) {
+            this.playbackMicros += (now - this.lastTickNanos) / 1000L;
+        }
+        this.lastTickNanos = now;
+
+        if (shouldPause) {
+            if (!this.paused) {
+                this.paused = true;
+                this.pausedPlaybackMicros = this.playbackMicros;
+                this.audioSource.pause();
+            }
+            return;
+        } else if (this.paused) {
+            this.paused = false;
+            this.playbackMicros = this.pausedPlaybackMicros;
+            this.audioSource.playFromTimestamp(this.refTimestamp + this.playbackMicros);
+        }
+
+        try {
+            boolean uploadVisible = !WebStreamerConfig.isVisibleUploadOnly() || this.isVisible();
+
+            if (uploadVisible) {
+                long prevPts = this.nativeGrabber.getLastPtsUs();
+                boolean gotFrame = this.nativeGrabber.readAndUpload(this.tex.getGlId());
+                if (gotFrame) {
+                    if (!this.linearFilterApplied) {
+                        this.linearFilterApplied = true;
+                        this.tex.setLinearFilter();
+                    }
+                    long newPts = this.nativeGrabber.getLastPtsUs();
+                    if (newPts > prevPts && prevPts >= 0) {
+                        this.playbackMicros = newPts;
+                    } else {
+                        this.playbackMicros += 33_333;
+                    }
+                }
+            }
+
+        } catch (Exception e) {
+            this.failedGrabs++;
+            WebStreamerMod.LOGGER.error(makeLog("Native frame read failed ({}/{})."),
+                    this.failedGrabs, MAX_FAILED_GRABS, e);
+            if (this.failedGrabs >= MAX_FAILED_GRABS) {
+                WebStreamerMod.LOGGER.error(makeLog("Too many failed grabs, marking layer as lost."));
+                this.stopGrabber();
+                this.grabberFailed = true;
+                this.audioSource.stop();
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Grabber — JavaCV path (original)
+    // -------------------------------------------------------------------------
+
+    private void startJavaCVGrabberAsync() {
         if (this.destroyed) {
             return;
         }
 
+        this.useNative = false;
         FFmpegLibrary.ensureInitialized();
 
         ShortBuffer audioBuf = this.res.allocAudioBuffer();
@@ -271,7 +364,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
             AudioStreamingBuffer.resetTimestampTracker();
 
-            // Initialize buffer pool
             for (int i = 0; i < FRAME_BUFFER_POOL_SIZE; i++) {
                 this.bufferPool.add(ByteBuffer.allocateDirect(FRAME_BUFFER_SIZE));
             }
@@ -333,9 +425,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             this.restartAttempts = 0;
             this.lastRestartAttemptNanos = 0;
 
-            // Pre-fetch the next video's playlist so it's cached when this video ends.
-            // This must run AFTER grabberReady is set so tryRestartNextVideo() can
-            // safely proceed on the render thread without blocking on HTTP.
             if (this.display != null) {
                 if (this.display.getSource() instanceof YoutubeDisplaySource ytSource && ytSource.hasPlaylist()) {
                     ytSource.prepareNextVideo();
@@ -405,9 +494,9 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         this.decodeThread = new Thread(() -> {
             FFmpegFrameGrabber localGrabber = null;
             try {
-                startGrabberAsync();
+                startJavaCVGrabberAsync();
                 localGrabber = this.grabber;
-                if (this.grabberReady && !this.destroyed) {
+                if (this.grabberReady && !this.destroyed && !this.useNative) {
                     backgroundDecodeLoop();
                 }
             } finally {
@@ -426,11 +515,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         int sampleRate = frame.sampleRate;
         long timestamp = frame.timestamp;
 
-        // A single malformed audio frame must not kill the whole stream: the
-        // decode-thread catch would otherwise mark the layer as permanently
-        // failed (grabberFailed), silencing it until the renderer rebuilds the
-        // layer on the next look. Transient bad frames (e.g. at a video
-        // transition, or on stream hiccups) should just be skipped.
         if (raw == null || channels <= 0 || sampleRate <= 0) {
             return;
         }
@@ -485,14 +569,20 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             return;
         }
         this.decodeFinished = true;
+
+        // Stop native grabber
+        if (this.nativeGrabber != null) {
+            this.nativeGrabber.kill();
+            this.nativeGrabber.close();
+            this.nativeGrabber = null;
+            this.useNative = false;
+        }
+
+        // Stop JavaCV grabber
         Thread dt = this.decodeThread;
         this.decodeThread = null;
         if (dt != null) {
             dt.interrupt();
-            // Do not join — the decode thread releases the grabber in its
-            // finally block. Joining would block the render thread for up to
-            // 500 ms per layer, causing massive freezes when 20+ layers are
-            // cleaned up simultaneously (e.g. after the 60 s orphan timeout).
         }
         if (this.tempAudioBuffer != null) {
             this.res.freeAudioBuffer(this.tempAudioBuffer);
@@ -506,30 +596,12 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         this.grabberPending = false;
     }
 
-    /**
-     * Attempt to advance to the next video in a playlist.
-     *
-     * <p><b>Must never perform synchronous HTTP.</b> If the next video's URI
-     * has not been pre-fetched yet, returns {@code WAITING} so the caller can
-     * keep the display alive and retry on the next tick.</p>
-     *
-     * @return {@code RESTARTED} if the grabber was restarted with the next
-     *         video, {@code WAITING} if the prefetch is not yet ready, or
-     *         {@code NO_PLAYLIST} if there is no playlist or advancement is
-     *         not possible.
-     */
-    private static final int RESTART_RESTARTED = 1;
-    private static final int RESTART_WAITING = -1;
-    private static final int RESTART_NO_PLAYLIST = 0;
-
     private int tryRestartNextVideo() {
-        // Try YoutubeDisplaySource playlist
         if (this.display != null && this.display.getSource() instanceof YoutubeDisplaySource youtubeSource) {
             if (!youtubeSource.hasPlaylist()) {
                 return RESTART_NO_PLAYLIST;
             }
             if (!youtubeSource.hasPreparedNextUri()) {
-                // Prefetch not ready — make sure it is running, then wait.
                 youtubeSource.prepareNextVideo();
                 return RESTART_WAITING;
             }
@@ -563,7 +635,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             return RESTART_RESTARTED;
         }
 
-        // Try ServerDisplaySource playlist
         if (this.display != null && this.display.getSource() instanceof ServerDisplaySource serverSource) {
             if (!serverSource.hasPlaylist()) {
                 return RESTART_NO_PLAYLIST;
@@ -649,11 +720,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 this.grabberFailureLogged = true;
             }
             this.audioSource.stop();
-            // Bounded auto-restart: a transient failure (e.g. while the next
-            // playlist video starts and the display is off-screen, so the
-            // renderer is not keeping the layer alive) must not leave the
-            // display permanently silent until someone looks back at it — the
-            // renderer only rebuilds the layer once it is rendered again.
             if (this.restartAttempts < MAX_RESTART_RETRIES
                     && System.nanoTime() - this.lastRestartAttemptNanos >= RESTART_RETRY_INTERVAL_NS) {
                 this.lastRestartAttemptNanos = System.nanoTime();
@@ -671,9 +737,16 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             return;
         }
 
+        // Start native grabber on first tick
         if (!this.grabberPending && !this.grabberReady && !this.decodeFinished) {
             this.grabberPending = true;
-            this.startSetup();
+            if (NativeLibrary.isAvailable()) {
+                // Native path: open on render thread (fast, no blocking I/O)
+                this.startNativeGrabber();
+            } else {
+                // JavaCV path: spawn background thread
+                this.startSetup();
+            }
             return;
         }
 
@@ -684,6 +757,19 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             return;
         }
 
+        // Dispatch to native or JavaCV tick
+        if (this.useNative) {
+            tickNative();
+        } else {
+            tickJavaCV();
+        }
+    }
+
+    private static final int RESTART_RESTARTED = 1;
+    private static final int RESTART_WAITING = -1;
+    private static final int RESTART_NO_PLAYLIST = 0;
+
+    private void tickJavaCV() {
         long now = System.nanoTime();
 
         boolean shouldPause = this.externalPaused;
@@ -722,11 +808,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             int audioBuffersQueued = 0;
             int framesDisplayed = 0;
 
-            // Audio processing is independent from frame grabbing: a transient
-            // audio error must not count as a failed grab and eventually mark
-            // the layer as lost. Log and keep going, so a hiccup during the
-            // next-video restart while the display is off-screen doesn't leave
-            // it silent until the renderer rebuilds the layer.
             try {
                 ShortBuffer audioDataShort = this.tempAudioByteBuf.asShortBuffer();
                 RawAudioChunk chunk;
@@ -819,7 +900,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
                 int restartResult = this.tryRestartNextVideo();
                 if (restartResult == RESTART_RESTARTED) {
-                    // Pre-fetch the next video after this one
                     if (this.display != null) {
                         if (this.display.getSource() instanceof YoutubeDisplaySource ytSource && ytSource.hasPlaylist()) {
                             ytSource.prepareNextVideo();
@@ -829,9 +909,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                     }
                     return;
                 } else if (restartResult == RESTART_WAITING) {
-                    // Prefetch not ready yet — keep the display alive showing
-                    // the last frame and retry on the next tick. Do NOT stop
-                    // the grabber or the audio source.
                     return;
                 }
                 WebStreamerMod.LOGGER.info(makeLog("Reached end of video."));

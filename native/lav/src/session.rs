@@ -1,9 +1,11 @@
 use std::collections::HashMap;
+use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use ffmpeg_next as ffmpeg;
+use ffmpeg_sys_next as sys;
 
 use crate::cache::{CachedPacket, SharedPacketRing};
 
@@ -33,6 +35,32 @@ impl HwBackend {
             "windows" => Self::D3D11VA,
             "linux" => Self::VAAPI,
             _ => Self::None,
+        }
+    }
+
+    fn hw_device_type(self) -> Option<sys::AVHWDeviceType> {
+        match self {
+            Self::VideoToolbox => Some(sys::AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX),
+            Self::D3D11VA => Some(sys::AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA),
+            Self::VAAPI => Some(sys::AVHWDeviceType::AV_HWDEVICE_TYPE_VAAPI),
+            Self::CUDA => Some(sys::AVHWDeviceType::AV_HWDEVICE_TYPE_CUDA),
+            Self::None => None,
+        }
+    }
+
+    /// Try to create a hardware device context. Returns the raw AVBufferRef
+    /// pointer on success, or None if HW accel isn't available on this system.
+    unsafe fn try_create_device(self) -> Option<*mut sys::AVBufferRef> {
+        let hw_type = self.hw_device_type()?;
+        let mut dev: *mut sys::AVBufferRef = ptr::null_mut();
+        let ret = sys::av_hwdevice_ctx_create(&mut dev, hw_type, ptr::null(), ptr::null_mut(), 0);
+        if ret >= 0 && !dev.is_null() {
+            Some(dev)
+        } else {
+            if !dev.is_null() {
+                sys::av_buffer_unref(&mut dev);
+            }
+            None
         }
     }
 }
@@ -86,10 +114,13 @@ struct SessionInner {
     decoder: Option<ffmpeg::decoder::Video>,
     scaler: Option<ffmpeg::software::scaling::Context>,
     sw_frame: ffmpeg::frame::Video,
+    hw_frame: ffmpeg::frame::Video,
     frame_count: u64,
     last_pts_us: i64,
     eof: bool,
     hw_backend: HwBackend,
+    hw_device_ctx: Option<*mut sys::AVBufferRef>,
+    hw_pix_fmt: Option<sys::AVPixelFormat>,
 }
 
 unsafe impl Send for SessionInner {}
@@ -111,8 +142,57 @@ impl LavSession {
         let stream = ictx.stream(video_stream_index).unwrap();
         let codec_params = stream.parameters();
 
-        let context_decoder = ffmpeg::codec::context::Context::from_parameters(codec_params)
+        // Try to create a hardware device context
+        let mut hw_device: Option<*mut sys::AVBufferRef> = None;
+        let mut hw_pix_fmt: Option<sys::AVPixelFormat> = None;
+
+        unsafe {
+            if let Some(mut dev) = hw_backend.try_create_device() {
+                // Find the hw pixel format supported by this codec
+                let codec_id: sys::AVCodecID = codec_params.id().into();
+                let codec = sys::avcodec_find_decoder(codec_id);
+                if !codec.is_null() {
+                    let mut i = 0;
+                    loop {
+                        let config = sys::avcodec_get_hw_config(codec, i);
+                        if config.is_null() {
+                            break;
+                        }
+                        let cfg = &*config;
+                        if cfg.methods & sys::AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX as i32 != 0 {
+                            hw_pix_fmt = Some(cfg.pix_fmt);
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+
+                if hw_pix_fmt.is_some() {
+                    hw_device = Some(dev);
+                    log::info!("Session {}: using {:?} hardware acceleration", id, hw_backend);
+                } else {
+                    // HW device created but codec doesn't support it
+                    sys::av_buffer_unref(&mut dev as *mut _);
+                    log::info!("Session {}: {:?} device created but codec lacks HW config, using software", id, hw_backend);
+                }
+            } else {
+                log::info!("Session {}: {:?} not available, using software decode", id, hw_backend);
+            }
+        }
+
+        let mut context_decoder = ffmpeg::codec::context::Context::from_parameters(codec_params)
             .context("failed to create codec context")?;
+
+        // If HW accel is available, configure the decoder with hw_device_ctx
+        // and set the hw pixel format so frames are decoded directly on the GPU.
+        unsafe {
+            if let (Some(dev_ptr), Some(pf)) = (&hw_device, hw_pix_fmt) {
+                let raw_ctx = context_decoder.as_mut_ptr();
+                (*raw_ctx).hw_device_ctx = sys::av_buffer_ref(*dev_ptr);
+                (*raw_ctx).get_format = Some(hardware_get_format);
+                log::info!("Session {}: configured decoder with hw_pix_fmt={:?}", id, pf);
+            }
+        }
 
         let mut decoder = context_decoder.decoder().video()
             .context("failed to create video decoder")?;
@@ -122,8 +202,14 @@ impl LavSession {
             count: num_cpus::get().min(8),
         });
 
+        // Determine the pixel format the decoder is actually outputting.
+        // When HW accel is active this will be the hw pixel format (e.g. D3D11,
+        // VAAPI, CUDA). We need to create the scaler with the *software* format
+        // as input, and an extra step to transfer hw->sw in between.
+        let decoder_pix_fmt = decoder.format();
+
         let scaler = ffmpeg::software::scaling::Context::get(
-            decoder.format(),
+            decoder_pix_fmt,
             decoder.width(),
             decoder.height(),
             ffmpeg::format::Pixel::YUV420P,
@@ -133,6 +219,7 @@ impl LavSession {
         )?;
 
         let sw_frame = ffmpeg::frame::Video::empty();
+        let hw_frame = ffmpeg::frame::Video::empty();
 
         Ok(Self {
             id,
@@ -146,10 +233,13 @@ impl LavSession {
                 decoder: Some(decoder),
                 scaler: Some(scaler),
                 sw_frame,
+                hw_frame,
                 frame_count: 0,
                 last_pts_us: 0,
                 eof: false,
                 hw_backend,
+                hw_device_ctx: hw_device,
+                hw_pix_fmt,
             }),
         })
     }
@@ -164,6 +254,8 @@ impl LavSession {
         let video_idx = inner.video_stream_index.context("no video stream")?;
         let tb = inner.input_context.as_ref().context("no input context")?
             .stream(video_idx).unwrap().time_base();
+
+        let hw_active = inner.hw_pix_fmt.is_some();
 
         loop {
             if self.interrupted.load(Ordering::Relaxed) {
@@ -210,8 +302,48 @@ impl LavSession {
                 }
             }
 
-            // Send packet to decoder, then decode
-            {
+            // Decode
+            if hw_active {
+                // Hardware decode path: decode into hw_frame, then transfer to sw_frame
+                let mut hw_frame = ffmpeg::frame::Video::empty();
+                std::mem::swap(&mut hw_frame, &mut inner.hw_frame);
+                let decoder = inner.decoder.as_mut().context("no decoder")?;
+                decoder.send_packet(&packet)?;
+
+                match decoder.receive_frame(&mut hw_frame) {
+                    Ok(()) => {
+                        // Transfer HW frame to software frame (GPU -> CPU)
+                        let mut sw_frame = ffmpeg::frame::Video::empty();
+                        std::mem::swap(&mut sw_frame, &mut inner.sw_frame);
+                        unsafe {
+                            let ret = sys::av_hwframe_transfer_data(
+                                sw_frame.as_mut_ptr() as *mut _,
+                                hw_frame.as_mut_ptr() as *mut _,
+                                0,
+                            );
+                            if ret < 0 {
+                                std::mem::swap(&mut hw_frame, &mut inner.hw_frame);
+                                std::mem::swap(&mut sw_frame, &mut inner.sw_frame);
+                                let err = format!("hw frame transfer failed: {}", ret);
+                                *self.error.lock().unwrap() = err.clone();
+                                return Err(anyhow::anyhow!(err));
+                            }
+                        }
+                        std::mem::swap(&mut hw_frame, &mut inner.hw_frame);
+                        std::mem::swap(&mut sw_frame, &mut inner.sw_frame);
+                    }
+                    Err(ffmpeg::Error::Other { errno: ffmpeg::error::EAGAIN }) => {
+                        std::mem::swap(&mut hw_frame, &mut inner.hw_frame);
+                        continue;
+                    }
+                    Err(e) => {
+                        std::mem::swap(&mut hw_frame, &mut inner.hw_frame);
+                        *self.error.lock().unwrap() = e.to_string();
+                        return Err(e.into());
+                    }
+                }
+            } else {
+                // Software decode path (original)
                 let mut sw_frame = ffmpeg::frame::Video::empty();
                 std::mem::swap(&mut sw_frame, &mut inner.sw_frame);
                 let decoder = inner.decoder.as_mut().context("no decoder")?;
@@ -233,7 +365,7 @@ impl LavSession {
                 }
             }
 
-            // Scale frame
+            // Scale frame (converts whatever the decoder output to I420)
             let mut output_frame = ffmpeg::frame::Video::empty();
             {
                 let mut sw_frame = ffmpeg::frame::Video::empty();
@@ -343,8 +475,39 @@ impl Drop for LavSession {
         if let Some(ref mut decoder) = inner.decoder {
             let _ = decoder.send_eof();
         }
-        log::debug!("Session {} dropped after {} frames", self.id, inner.frame_count);
+        // Free hardware device context
+        if let Some(dev) = inner.hw_device_ctx.take() {
+            unsafe {
+                let mut dev_copy = dev;
+                sys::av_buffer_unref(&mut dev_copy);
+            }
+        }
+        log::debug!("Session {} dropped after {} frames (hw={:?})", self.id, inner.frame_count, inner.hw_backend);
     }
+}
+
+/// FFmpeg get_format callback that selects the hardware pixel format when
+/// the decoder offers a list of supported formats.
+///
+/// # Safety
+/// Called by FFmpeg from the decoder. The `formats` pointer is valid and
+/// terminated by `AV_PIX_FMT_NONE`.
+unsafe extern "C" fn hardware_get_format(
+    _ctx: *mut sys::AVCodecContext,
+    formats: *const sys::AVPixelFormat,
+) -> sys::AVPixelFormat {
+    let mut i = 0;
+    loop {
+        let fmt = *formats.add(i);
+        if fmt == sys::AVPixelFormat::AV_PIX_FMT_NONE {
+            break;
+        }
+        log::debug!("hardware_get_format: offering {:?}", fmt);
+        i += 1;
+    }
+    // Return the first format offered — the decoder's preferred hw format.
+    // The HW transfer step will convert it to software I420 before scaling.
+    *formats
 }
 
 fn us_to_tb(us: i64, tb: ffmpeg::Rational) -> i64 {

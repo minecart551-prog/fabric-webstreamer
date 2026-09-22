@@ -18,11 +18,6 @@ import java.nio.ByteOrder;
  *
  * <p>Falls back gracefully: if the native library is not available, all methods
  * return failure states and the caller can fall back to the JavaCV path.</p>
- *
- * <p><b>Backward compatibility:</b> This class is purely additive. The existing
- * {@code DisplayLayerVideo} continues to use JavaCV by default. Native decoding
- * is only activated when the native library is loaded AND the user/server opts in
- * (e.g. via config).</p>
  */
 @Environment(EnvType.CLIENT)
 public class NativeFrameGrabber {
@@ -38,6 +33,17 @@ public class NativeFrameGrabber {
     // I420 frame buffer (direct for JNI)
     private ByteBuffer yuvBuffer;
     private static final int MAX_FRAME_SIZE = 3840 * 2160 * 3 / 2; // 4K I420
+
+    // Pre-allocated conversion buffers (reused across frames to avoid GC pressure)
+    private byte[] yuvArray;
+    private byte[] rgbArray;
+    private ByteBuffer uploadBuffer;
+    private int allocYuvSize = 0;
+    private int allocRgbSize = 0;
+
+    // Reusable int arrays for JNI output (avoid per-call allocation)
+    private final int[] dimsOut = new int[2];
+    private final long[] ptsOut = new long[1];
 
     public NativeFrameGrabber() {}
 
@@ -88,16 +94,14 @@ public class NativeFrameGrabber {
         if (handle <= 0 || !started) return false;
 
         try {
-            int[] dims = new int[2];
-            long[] pts = new long[1];
             yuvBuffer.clear();
-            long written = NativeLibrary.nReadFrameI420(handle, yuvBuffer, MAX_FRAME_SIZE, dims, pts);
+            long written = NativeLibrary.nReadFrameI420(handle, yuvBuffer, MAX_FRAME_SIZE, dimsOut, ptsOut);
 
             if (written <= 0) return false;
 
-            int w = dims[0];
-            int h = dims[1];
-            long ptsUs = pts[0];
+            int w = dimsOut[0];
+            int h = dimsOut[1];
+            long ptsUs = ptsOut[0];
 
             if (w <= 0 || h <= 0) return false;
 
@@ -106,7 +110,7 @@ public class NativeFrameGrabber {
             lastPtsUs = ptsUs;
 
             // Upload I420 as RGB to texture
-            uploadI420AsRGB(textureId);
+            uploadI420AsRGB(textureId, w, h);
 
             return true;
         } catch (Throwable t) {
@@ -117,50 +121,58 @@ public class NativeFrameGrabber {
 
     /**
      * Convert I420 to RGB and upload to the GL texture.
-     * This is a simple CPU-side conversion. A production implementation would
-     * use a shader or the native library's GL interop.
+     * Uses pre-allocated buffers to avoid per-frame GC pressure.
      */
-    private void uploadI420AsRGB(int textureId) {
-        int w = lastWidth;
-        int h = lastHeight;
+    private void uploadI420AsRGB(int textureId, int w, int h) {
         int ySize = w * h;
         int uvSize = (w / 2) * (h / 2);
+        int yuvSize = ySize + uvSize * 2;
+        int rgbSize = w * h * 3;
 
-        // Read I420 from the native buffer
-        byte[] yuv = new byte[ySize + uvSize * 2];
+        // Grow buffers if needed (handles resolution changes)
+        if (yuvArray == null || allocYuvSize < yuvSize) {
+            allocYuvSize = yuvSize;
+            yuvArray = new byte[allocYuvSize];
+        }
+        if (rgbArray == null || allocRgbSize < rgbSize) {
+            allocRgbSize = rgbSize;
+            rgbArray = new byte[allocRgbSize];
+            uploadBuffer = ByteBuffer.allocateDirect(allocRgbSize).order(ByteOrder.nativeOrder());
+        }
+
+        // Bulk read I420 from native buffer
         yuvBuffer.position(0);
-        yuvBuffer.get(yuv, 0, Math.min(yuv.length, yuvBuffer.capacity()));
+        yuvBuffer.get(yuvArray, 0, Math.min(yuvSize, yuvBuffer.capacity()));
 
-        // Convert I420 to RGB
-        byte[] rgb = new byte[w * h * 3];
+        // Convert I420 to RGB — row-optimized with reduced bounds checks
         for (int row = 0; row < h; row++) {
+            int yRowStart = row * w;
+            int uvRowStart = (row / 2) * (w / 2);
+            int rgbRowStart = row * w * 3;
+
             for (int col = 0; col < w; col++) {
-                int y = yuv[row * w + col] & 0xFF;
-                int u = yuv[ySize + (row / 2) * (w / 2) + (col / 2)] & 0xFF;
-                int v = yuv[ySize + uvSize + (row / 2) * (w / 2) + (col / 2)] & 0xFF;
+                int y = yuvArray[yRowStart + col] & 0xFF;
+                int u = yuvArray[ySize + uvRowStart + (col / 2)] & 0xFF;
+                int v = yuvArray[ySize + uvSize + uvRowStart + (col / 2)] & 0xFF;
 
                 int c = y - 16;
                 int d = u - 128;
                 int e = v - 128;
 
-                int r = clamp((298 * c + 409 * e + 128) >> 8);
-                int g = clamp((298 * c - 100 * d - 208 * e + 128) >> 8);
-                int b = clamp((298 * c + 516 * d + 128) >> 8);
-
-                int idx = (row * w + col) * 3;
-                rgb[idx] = (byte) r;
-                rgb[idx + 1] = (byte) g;
-                rgb[idx + 2] = (byte) b;
+                int idx = rgbRowStart + col * 3;
+                rgbArray[idx]     = (byte) clamp((298 * c + 409 * e + 128) >> 8);
+                rgbArray[idx + 1] = (byte) clamp((298 * c - 100 * d - 208 * e + 128) >> 8);
+                rgbArray[idx + 2] = (byte) clamp((298 * c + 516 * d + 128) >> 8);
             }
         }
 
-        // Upload to GL texture
-        ByteBuffer buf = ByteBuffer.allocateDirect(rgb.length);
-        buf.put(rgb);
-        buf.flip();
+        // Bulk upload to GL
+        uploadBuffer.clear();
+        uploadBuffer.put(rgbArray, 0, rgbSize);
+        uploadBuffer.flip();
 
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, textureId);
-        GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGB8, w, h, 0, GL12.GL_BGR, GL11.GL_UNSIGNED_BYTE, buf);
+        GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGB8, w, h, 0, GL12.GL_BGR, GL11.GL_UNSIGNED_BYTE, uploadBuffer);
     }
 
     private static int clamp(int v) {
@@ -201,6 +213,11 @@ public class NativeFrameGrabber {
         }
         started = false;
         yuvBuffer = null;
+        yuvArray = null;
+        rgbArray = null;
+        uploadBuffer = null;
+        allocYuvSize = 0;
+        allocRgbSize = 0;
     }
 
     public boolean isFailed() { return failed; }
