@@ -1,0 +1,25 @@
+[package]
+name = "webstreamer-lav"
+version = "1.0.0"
+edition = "2021"
+authors = ["banishlight"]
+description = "libav-based decode backend for WebStreamer."
+license = "LGPL-3.0"
+
+[lib]
+name = "webstreamer_lav"
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+anyhow = "1.0"
+ffmpeg-next = { version = "9.0", features = ["codec", "format", "software-scaling", "software-resampling"] }
+jni = "0.21"
+log = "0.4"
+env_logger = "0.11"
+num_cpus = "1.16"
+ureq = { version = "3", features = ["json", "rustls"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
