@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "webstreamer",
-  "version": "1.5.0",
+  "version": "1.6.0",
 
   "name": "WebStreamer",
   "description": "A mod that let you display web streaming in HLS format. Currently supporting raw HLS and Twitch.",

@@ -1,6 +1,8 @@
 package fr.theorozier.webstreamer.display;
 
 import fr.theorozier.webstreamer.WebStreamerMod;
+import fr.theorozier.webstreamer.jni.NativeLibrary;
+import fr.theorozier.webstreamer.protocol.ProtocolVersion;
 import fr.theorozier.webstreamer.server.ServerSourceRegistry;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
@@ -29,6 +31,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
 
 /**
@@ -42,6 +45,9 @@ public class DisplayNetworking {
 	public static final Identifier DISPLAY_PLAYBACK_STATE_PACKET_ID = new Identifier("webstreamer:display_playback_state");
 	public static final Identifier SERVER_SOURCES_BROADCAST_PACKET_ID = new Identifier("webstreamer:server_sources_broadcast");
 
+	// New protocol channels (additive — old packets still work)
+	public static final Identifier HANDSHAKE_PACKET_ID = new Identifier("webstreamer:handshake");
+
 	private static final Map<PlaybackKey, Set<UUID>> PLAYBACK_VIEWERS = new HashMap<>();
 	private static final Map<PlaybackKey, Boolean> CLIENT_PLAYBACK_RANGE = new HashMap<>();
 	/** Last time the client sent a playback state packet per display (for the self-heal resync). */
@@ -49,6 +55,46 @@ public class DisplayNetworking {
 
 	/** Client-side cache of server sources (name → URL list), populated by server broadcasts. */
 	private static volatile Map<String, List<String>> clientSourceCache = Map.of();
+
+	// -----------------------------------------------------------------------
+	// Protocol negotiation state
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Per-player protocol negotiation state on the server side.
+	 * Tracks whether a player's client supports the new protobuf protocol.
+	 * If the client never sends a handshake (old client), it stays LEGACY.
+	 */
+	private static final Map<UUID, ProtocolState> PROTOCOL_STATES = new ConcurrentHashMap<>();
+
+	private enum ProtocolState {
+		/** Waiting for handshake from client. */
+		WAITING,
+		/** Client supports protobuf protocol. */
+		PROTO,
+		/** Client is legacy, use NBT packets. */
+		LEGACY
+	}
+
+	/**
+	 * Check if a player's client supports the new protobuf protocol.
+	 * Returns false for old clients that never sent a handshake.
+	 */
+	public static boolean clientSupportsProtobuf(ServerPlayerEntity player) {
+		return PROTOCOL_STATES.getOrDefault(player.getUuid(), ProtocolState.LEGACY) == ProtocolState.PROTO;
+	}
+
+	/**
+	 * Check if a player's client supports the new protobuf protocol.
+	 * Client-side version for checking server capabilities.
+	 */
+	@Environment(EnvType.CLIENT)
+	private static volatile boolean serverSupportsProtobuf = false;
+
+	@Environment(EnvType.CLIENT)
+	public static boolean serverSupportsProtobuf() {
+		return serverSupportsProtobuf;
+	}
 
 	private static PacketByteBuf encodeDisplayUpdatePacket(DisplayBlockEntity blockEntity) {
 		PacketByteBuf buf = PacketByteBufs.create();
@@ -174,6 +220,9 @@ public class DisplayNetworking {
     public static void registerDisplayUpdateReceiver() {
         ServerPlayNetworking.registerGlobalReceiver(DISPLAY_BLOCK_UPDATE_PACKET_ID, new DisplayUpdateHandler());
         ServerPlayNetworking.registerGlobalReceiver(DISPLAY_PLAYBACK_STATE_PACKET_ID, new PlaybackStateHandler());
+        // Register handshake receiver — old clients that don't speak this channel
+        // simply never send a packet here, so they stay in LEGACY state.
+        ServerPlayNetworking.registerGlobalReceiver(HANDSHAKE_PACKET_ID, new HandshakeHandler());
     }
 
     private static class DisplayUpdateHandler implements ServerPlayNetworking.PlayChannelHandler {
@@ -302,6 +351,116 @@ public class DisplayNetworking {
             return true;
         }
         return false;
+    }
+
+    // -----------------------------------------------------------------------
+    // Protocol handshake (backward-compatible)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Client-side only, send a version handshake to the server.
+     * The server responds with its own version. If both versions are
+     * compatible, both sides switch to protobuf. Otherwise, both sides
+     * continue using NBT packets.
+     *
+     * <p>Called once when the client first connects. Old servers that don't
+     * register a handler for this channel simply ignore the packet.</p>
+     */
+    @Environment(EnvType.CLIENT)
+    public static void sendHandshake() {
+        PacketByteBuf buf = PacketByteBufs.create();
+        buf.writeInt(ProtocolVersion.CURRENT_VERSION);
+        buf.writeString(ProtocolVersion.MOD_VERSION);
+        buf.writeString(ProtocolVersion.MC_VERSION);
+        buf.writeBoolean(NativeLibrary.isAvailable());
+        ClientPlayNetworking.send(HANDSHAKE_PACKET_ID, buf);
+    }
+
+    /**
+     * Server-side handler for the version handshake.
+     * If the client supports protobuf, the server marks the player as PROTO
+     * and responds with its own version. Otherwise, the player stays LEGACY.
+     */
+    private static class HandshakeHandler implements ServerPlayNetworking.PlayChannelHandler {
+        @Override
+        public void receive(MinecraftServer server, ServerPlayerEntity player,
+                           ServerPlayNetworkHandler handler, PacketByteBuf buf,
+                           PacketSender responseSender) {
+            int clientVersion = buf.readInt();
+            String clientModVersion = buf.readString();
+            String clientMcVersion = buf.readString();
+            boolean clientHasNative = buf.readBoolean();
+
+            WebStreamerMod.LOGGER.info("[Protocol] Handshake from {}: version={}, mod={}, mc={}, native={}",
+                    player.getName().getString(), clientVersion, clientModVersion, clientMcVersion, clientHasNative);
+
+            if (ProtocolVersion.isCompatible(clientVersion)) {
+                PROTOCOL_STATES.put(player.getUuid(), ProtocolState.PROTO);
+                // Respond with server version
+                PacketByteBuf response = PacketByteBufs.create();
+                response.writeInt(ProtocolVersion.CURRENT_VERSION);
+                response.writeString(ProtocolVersion.MOD_VERSION);
+                response.writeString(ProtocolVersion.MC_VERSION);
+                response.writeBoolean(true); // server supports persistence
+                response.writeBoolean(true); // server supports sync
+                response.writeBoolean(false); // requires_op_for_config (dynamic)
+                response.writeInt(50);       // max_displays_per_player
+                response.writeInt(512);      // max_render_distance
+                response.writeBoolean(true); // can_configure_displays
+                response.writeBoolean(true); // can_use_server_sources
+                responseSender.sendPacket(HANDSHAKE_PACKET_ID, response);
+
+                WebStreamerMod.LOGGER.info("[Protocol] Player {} negotiated protobuf protocol", player.getName().getString());
+            } else {
+                PROTOCOL_STATES.put(player.getUuid(), ProtocolState.LEGACY);
+                WebStreamerMod.LOGGER.info("[Protocol] Player {} using legacy NBT protocol (version {})",
+                        player.getName().getString(), clientVersion);
+            }
+        }
+    }
+
+    /**
+     * Client-side handler for the server's handshake response.
+     * If the server supports protobuf, the client switches to the new protocol.
+     */
+    @Environment(EnvType.CLIENT)
+    public static void registerHandshakeReceiver() {
+        ClientPlayNetworking.registerGlobalReceiver(HANDSHAKE_PACKET_ID, (client, handler, buf, responseSender) -> {
+            int serverVersion = buf.readInt();
+            String serverModVersion = buf.readString();
+            String serverMcVersion = buf.readString();
+            boolean serverPersistence = buf.readBoolean();
+            boolean serverSync = buf.readBoolean();
+            boolean serverRequiresOp = buf.readBoolean();
+            int maxDisplays = buf.readInt();
+            int maxRenderDist = buf.readInt();
+            boolean canConfigure = buf.readBoolean();
+            boolean canUseSources = buf.readBoolean();
+
+            client.executeSync(() -> {
+                if (ProtocolVersion.isCompatible(serverVersion)) {
+                    serverSupportsProtobuf = true;
+                    WebStreamerMod.LOGGER.info("[Protocol] Server supports protobuf (v{}, mod {})",
+                            serverVersion, serverModVersion);
+                } else {
+                    serverSupportsProtobuf = false;
+                    WebStreamerMod.LOGGER.info("[Protocol] Server is legacy (v{}), using NBT packets", serverVersion);
+                }
+            });
+        });
+    }
+
+    /**
+     * Clean up protocol state when a player disconnects.
+     */
+    public static void cleanupPlayerState(MinecraftServer server) {
+        for (var player : server.getPlayerManager().getPlayerList()) {
+            // Keep state for connected players
+        }
+        // Remove state for disconnected players
+        PROTOCOL_STATES.entrySet().removeIf(entry -> {
+            return server.getPlayerManager().getPlayer(entry.getKey()) == null;
+        });
     }
 
     private static record PlaybackKey(RegistryKey<World> world, BlockPos pos) { }

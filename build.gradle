@@ -1,6 +1,7 @@
 plugins {
 	id 'fabric-loom' version '1.5-SNAPSHOT'
 	id 'maven-publish'
+	id 'com.google.protobuf' version '0.9.4'
 }
 
 group = project.maven_group
@@ -24,20 +25,42 @@ dependencies {
 	implementation "org.bytedeco:javacv:${project.javacv_version}"
 	implementation "com.github.weisj:jsvg:${project.jsvg_parser}"
 
+	// Protobuf
+	implementation "com.google.protobuf:protobuf-java:3.25.3"
+
 	include "io.lindstrom:m3u8-parser:${project.m3u8_parser_version}"
 	include "com.github.weisj:jsvg:${project.jsvg_parser}"
 
 	include "org.bytedeco:javacv:${project.javacv_version}"
 	include "org.bytedeco:javacpp:${project.javacv_version}"
 	include "org.bytedeco:ffmpeg:6.0-${project.javacv_version}"
+	include "com.google.protobuf:protobuf-java:3.25.3"
+}
+
+protobuf {
+	protoc {
+		artifact = "com.google.protobuf:protoc:3.25.3"
+	}
+	generateProtoTasks {
+		all().each { task ->
+			task.builtins {
+				java {
+					option "lite" // Use protobuf-lite for smaller JAR size
+				}
+			}
+		}
+	}
 }
 
 processResources {
 	inputs.property "version", project.version
+	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 
 	filesMatching("fabric.mod.json") {
 		expand "version": project.version
 	}
+
+	exclude "**/*.proto"
 }
 
 java {
@@ -45,6 +68,12 @@ java {
 		languageVersion = JavaLanguageVersion.of(17)
 	}
 	withSourcesJar()
+}
+
+sourceSets.main {
+	proto {
+		srcDir 'src/main/proto'
+	}
 }
 
 tasks.withType(JavaCompile).configureEach {
@@ -56,6 +85,46 @@ jar {
 		rename { "${it}_${project.base.archivesName.get()}" }
 	}
 }
+
+// -----------------------------------------------------------------------
+// Native library build (Rust)
+// -----------------------------------------------------------------------
+
+// Detect OS for native library extension
+def osName = System.getProperty("os.name", "").toLowerCase()
+def nativeExt = osName.contains("win") ? ".dll" : (osName.contains("mac") ? ".dylib" : ".so")
+def nativeLibName = "libwebstreamer_lav" + (osName.contains("win") ? ".dll" : nativeExt)
+
+def nativeDir = file("native")
+def nativeBuildDir = file("native/target/release")
+def nativeOutputDir = file("src/main/resources/natives")
+
+task buildNative(type: Exec) {
+	description = 'Build the Rust native library with cargo'
+	group = 'native'
+	workingDir nativeDir
+	commandLine 'cargo', 'build', '--release', '--lib'
+
+	// Only run if native source files have changed
+	inputs.dir nativeDir
+	outputs.dir nativeBuildDir
+}
+
+// Copy the built native library into the resources directory
+task copyNative(type: Copy, dependsOn: buildNative) {
+	description = 'Copy the built native library to resources'
+	group = 'native'
+	from(nativeBuildDir) {
+		include nativeLibName
+		include "libwebstreamer_lav${nativeExt}"
+		include "webstreamer_lav${nativeExt}"
+	}
+	into nativeOutputDir
+	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+// Make the jar task depend on native build
+jar.dependsOn copyNative
 
 publishing {
 	publications {

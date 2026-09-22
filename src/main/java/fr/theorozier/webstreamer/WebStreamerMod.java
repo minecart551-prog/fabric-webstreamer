@@ -96,6 +96,9 @@ public class WebStreamerMod implements ModInitializer {
                 .build());
         DisplayNetworking.registerDisplayUpdateReceiver();
         ServerTickEvents.END_SERVER_TICK.register(DisplayNetworking::cleanupPlaybackViewers);
+        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
+            DisplayNetworking.cleanupPlayerState(server);
+        });
         CommandRegistrationCallback.EVENT.register(WebStreamerCommands::register);
         configDir = FabricLoader.getInstance().getConfigDir();
         WebStreamerConfig.load(configDir);

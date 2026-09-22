@@ -1,0 +1,156 @@
+syntax = "proto3";
+
+package webstreamer;
+
+option java_package = "fr.theorozier.webstreamer.protocol";
+option java_outer_classname = "WebstreamerProtocol";
+
+// Protocol version - increment when the schema changes.
+// Clients and servers exchange this on first contact; if either side
+// doesn't speak the new protocol, they fall back to legacy NBT packets.
+message ProtocolVersion {
+    int32 version = 1;         // Current: 1
+    string mod_version = 2;    // e.g. "1.6.0"
+    string mc_version = 3;     // e.g. "1.20.1"
+}
+
+// Capability advertisement sent by the client after version handshake.
+// The server replies with its own capabilities. Both sides then know
+// what features the other supports.
+message ClientHello {
+    int32 protocol_version = 1;
+    string mod_version = 2;
+
+    // Feature flags
+    bool supports_native_decode = 3;   // Rust native decoder available
+    bool supports_protobuf = 4;        // Can speak protobuf protocol
+    bool supports_hw_accel = 5;        // Hardware acceleration available
+
+    // Hardware info (for server-side logging/diagnostics)
+    string gpu_name = 6;
+    int64 vram_mb = 7;
+    int32 cpu_cores = 8;
+    int64 ram_mb = 9;
+
+    // Supported codecs
+    repeated string supported_codecs = 10;
+}
+
+message ServerHello {
+    int32 protocol_version = 1;
+    string mod_version = 2;
+
+    // Server feature flags
+    bool supports_persistence = 3;     // Server persists display settings
+    bool supports_sync_playback = 4;   // Server manages playback sync
+    bool requires_op_for_config = 5;   // Config changes require OP
+
+    // Server limits
+    int32 max_displays_per_player = 6;
+    int32 max_render_distance = 7;
+
+    // Permissions for this player
+    bool can_configure_displays = 8;
+    bool can_use_server_sources = 9;
+}
+
+// Display state - sent when a display is created, updated, or synced.
+// This replaces the NBT-based display_block_update packet when both
+// sides support protobuf.
+message DisplayState {
+    // Position (unchanged from old NBT format for compatibility)
+    int32 pos_x = 1;
+    int32 pos_y = 2;
+    int32 pos_z = 3;
+
+    // Display properties (same fields as NBT "display" compound)
+    float width = 4;
+    float height = 5;
+    float audio_distance = 6;
+    float audio_volume = 7;
+    float render_distance = 8;
+    double offset_x = 9;
+    double offset_y = 10;
+    double offset_z = 11;
+    float rotation_x = 12;
+    float rotation_y = 13;
+    float rotation_z = 14;
+    float curvature = 15;
+    float brightness = 16;
+    string display_side = 17;   // FRONT, BACK, BOTH
+    bool requires_op = 18;
+    bool playback_paused = 19;
+
+    // Source (oneof for type safety)
+    oneof source {
+        RawSource raw = 20;
+        YouTubeSource youtube = 21;
+        TwitchSource twitch = 22;
+        ServerSource server_source = 23;
+    }
+}
+
+message RawSource {
+    string url = 1;
+    bool random_start_frame = 2;
+}
+
+message YouTubeSource {
+    string video_id = 1;
+    int32 quality = 2;
+    repeated string playlist_video_ids = 3;
+    int32 playlist_index = 4;
+    bool shuffle = 5;
+}
+
+message TwitchSource {
+    string channel = 1;
+    string quality = 2;
+}
+
+message ServerSource {
+    string source_name = 1;
+    int32 index = 2;
+    bool shuffle = 3;
+}
+
+// Playback sync - replaces the boolean inRange packet with richer state.
+message PlaybackSync {
+    int32 pos_x = 1;
+    int32 pos_y = 2;
+    int32 pos_z = 3;
+    bool in_range = 4;
+
+    // Rich sync data (optional, used when server supports sync_playback)
+    double playback_position_us = 5;  // Current playback position
+    bool is_playing = 6;
+    int64 timestamp_us = 7;           // Server timestamp for sync
+}
+
+// Top-level envelope wrapping all protocol messages.
+// Sent on the "webstreamer:proto" channel.
+message Envelope {
+    oneof message {
+        ProtocolVersion version = 1;
+        ClientHello client_hello = 2;
+        ServerHello server_hello = 3;
+        DisplayState display_state = 4;
+        PlaybackSync playback_sync = 5;
+        DisplayUpdate display_update = 6;
+        RequestSync request_sync = 7;
+    }
+}
+
+// Request a full sync of all displays from the server.
+message RequestSync {
+    // Empty - server responds with all display states
+}
+
+// Legacy-compatible display update (client -> server).
+// Carries the same data as the old NBT packet but in protobuf.
+message DisplayUpdate {
+    int32 pos_x = 1;
+    int32 pos_y = 2;
+    int32 pos_z = 3;
+    DisplayState state = 4;
+}

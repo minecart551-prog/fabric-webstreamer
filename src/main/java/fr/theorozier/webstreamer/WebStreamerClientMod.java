@@ -4,10 +4,12 @@ import fr.theorozier.webstreamer.twitch.TwitchClient;
 import fr.theorozier.webstreamer.display.DisplayNetworking;
 import fr.theorozier.webstreamer.display.render.DisplayBlockEntityRenderer;
 import fr.theorozier.webstreamer.display.render.DisplayLayerManager;
+import fr.theorozier.webstreamer.jni.NativeLibrary;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.fabricmc.fabric.api.blockrenderlayer.v1.BlockRenderLayerMap;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.render.block.entity.BlockEntityRendererFactories;
 import net.minecraft.client.render.RenderLayer;
@@ -57,6 +59,9 @@ public class WebStreamerClientMod implements ClientModInitializer {
         System.out.println("============ WEBSTREAMER CLIENT INIT START ============");
         WebStreamerMod.LOGGER.warn("========== WEBSTREAMER CLIENT MOD INITIALIZING ==========");
 
+        // Initialize native library (optional — falls back to JavaCV if unavailable)
+        NativeLibrary.init();
+
         // BlockEntityRendererRegistry.register(WebStreamerMod.DISPLAY_BLOCK_ENTITY, DisplayBlockEntityRenderer::new);
         BlockEntityRendererFactories.register(WebStreamerMod.DISPLAY_BLOCK_ENTITY, DisplayBlockEntityRenderer::new);
         System.out.println("[CLIENT] Registered DISPLAY_BLOCK_ENTITY renderer");
@@ -78,6 +83,12 @@ public class WebStreamerClientMod implements ClientModInitializer {
         TWITCH_CLIENT = new TwitchClient();
         YOUTUBE_CLIENT = new YoutubeClient();
         DisplayNetworking.registerSourcesBroadcastReceiver();
+        DisplayNetworking.registerHandshakeReceiver();
+
+        // Send handshake when connecting to a server
+        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
+            DisplayNetworking.sendHandshake();
+        });
     }
 
 }
