@@ -74,6 +74,23 @@ public class DisplayTexture extends AbstractTexture {
         GlStateManager._texParameter(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
     }
 
+    /**
+     * Override to actually delete the GL texture before clearing the reference.
+     * Vanilla {@code AbstractTexture.clearGlId()} only sets {@code glId = -1}
+     * without calling {@code glDeleteTextures()}, which leaks VRAM every time a
+     * display layer is created and cleaned up (player moves in/out of range,
+     * chunks load/unload).  Over many hours this can contribute to GPU memory
+     * exhaustion, especially in heavily modded instances.
+     */
+    @Override
+    public void clearGlId() {
+        int id = this.getGlId();
+        if (id != -1) {
+            RenderSystem.deleteTexture(id);
+        }
+        super.clearGlId();
+    }
+
     @Override
     public void load(ResourceManager manager) { }
 
