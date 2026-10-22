@@ -137,10 +137,17 @@ public class DisplayLayerManager extends DisplayLayerMap<DisplayLayerNode.Key> {
         String path = key.uri().getPath();
         if (path != null) {
             if (path.endsWith(".m3u8")) {
-                FFmpegLibrary.initializeFrameGrabber();
+                if (!FFmpegLibrary.initializeFrameGrabber()) {
+                    // FFmpeg is unavailable for this session (natives missing/corrupt).
+                    // Fail like the cost limit does so creation gets blocked instead of
+                    // rebuilding a doomed layer — and logging errors — every frame.
+                    throw new OutOfLayerException();
+                }
                 return new DisplayLayerHls(key.uri(), this.res);
             } else if (path.endsWith(".gif")) {
-                FFmpegLibrary.initializeFrameGrabber();
+                if (!FFmpegLibrary.initializeFrameGrabber()) {
+                    throw new OutOfLayerException();
+                }
                 boolean randomStart = false;
                 if (key.display() != null) {
                     if (key.display().getSource() instanceof fr.theorozier.webstreamer.display.source.RawDisplaySource rawSrc) {
@@ -163,7 +170,9 @@ public class DisplayLayerManager extends DisplayLayerMap<DisplayLayerNode.Key> {
         // DisplayLayerVideo which feeds the URL straight into FrameGrabber.
         String scheme = key.uri().getScheme();
         if ("http".equals(scheme) || "https".equals(scheme)) {
-            FFmpegLibrary.initializeFrameGrabber();
+            if (!FFmpegLibrary.initializeFrameGrabber()) {
+                throw new OutOfLayerException();
+            }
             return new DisplayLayerVideo(key, this.res);
         }
 

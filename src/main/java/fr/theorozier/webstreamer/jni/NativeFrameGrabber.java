@@ -22,24 +22,43 @@ import java.nio.ByteOrder;
 @Environment(EnvType.CLIENT)
 public class NativeFrameGrabber {
 
-    private long handle = 0;
-    private boolean started = false;
+    private volatile long handle = 0;
+    private volatile boolean started = false;
     private boolean failed = false;
 
     private int lastWidth = 0;
     private int lastHeight = 0;
     private long lastPtsUs = 0;
 
-    // I420 frame buffer (direct for JNI)
+    // I420 frame buffer (direct for JNI) — decode worker thread only
     private ByteBuffer yuvBuffer;
     private static final int MAX_FRAME_SIZE = 3840 * 2160 * 3 / 2; // 4K I420
 
     // Pre-allocated conversion buffers (reused across frames to avoid GC pressure)
     private byte[] yuvArray;
-    private byte[] rgbArray;
-    private ByteBuffer uploadBuffer;
     private int allocYuvSize = 0;
-    private int allocRgbSize = 0;
+
+    // Frame handoff between the decode worker (fills a slot) and the render
+    // thread (uploads the pending slot to GL). Double-buffered so the worker
+    // can decode the next frame while GL uploads the current one; the worker
+    // blocks when a frame is still pending, which backpressures decoding and
+    // effectively pauses it while the layer is not being rendered.
+    private final Object handoffLock = new Object();
+    private boolean pendingNew = false;
+    private int fillSlot = 0;
+    private int pendingSlot = -1;
+    private final byte[][] rgbArrays = new byte[2][];
+    private final ByteBuffer[] rgbBuffers = new ByteBuffer[2];
+    private final int[] allocRgbSizes = new int[2];
+    private int pendingWidth = 0;
+    private int pendingHeight = 0;
+    private long pendingPtsUs = 0;
+    private long uploadedPtsUs = 0;
+
+    // Render thread only: remembers the size currently stored in the GL
+    // texture so unchanged frames can use glTexSubImage2D.
+    private int uploadedTexW = 0;
+    private int uploadedTexH = 0;
 
     // Reusable int arrays for JNI output (avoid per-call allocation)
     private final int[] dimsOut = new int[2];
@@ -85,15 +104,23 @@ public class NativeFrameGrabber {
     }
 
     /**
-     * Read the next frame as I420 and upload it to the given GL texture.
+     * Decode the next frame and convert it to BGR. Called from the background
+     * decode thread only. Blocks (briefly) while the render thread has not yet
+     * uploaded the previously decoded frame.
      *
-     * @param textureId The OpenGL texture ID to upload to.
-     * @return true if a frame was decoded and uploaded.
+     * @return true if a frame was decoded and published for upload.
      */
-    public boolean readAndUpload(int textureId) {
+    public boolean decodeToPending() {
         if (handle <= 0 || !started) return false;
 
         try {
+            synchronized (handoffLock) {
+                while (pendingNew) {
+                    if (handle <= 0 || !started) return false;
+                    handoffLock.wait(50);
+                }
+            }
+
             yuvBuffer.clear();
             long written = NativeLibrary.nReadFrameI420(handle, yuvBuffer, MAX_FRAME_SIZE, dimsOut, ptsOut);
 
@@ -109,10 +136,25 @@ public class NativeFrameGrabber {
             lastHeight = h;
             lastPtsUs = ptsUs;
 
-            // Upload I420 as RGB to texture
-            uploadI420AsRGB(textureId, w, h);
+            // Convert I420 to BGR into the current fill slot (no GL here)
+            int slot = fillSlot;
+            convertI420ToRgb(slot, w, h);
 
+            synchronized (handoffLock) {
+                if (!pendingNew) {
+                    pendingSlot = slot;
+                    fillSlot = 1 - slot;
+                    pendingWidth = w;
+                    pendingHeight = h;
+                    pendingPtsUs = ptsUs;
+                    pendingNew = true;
+                    handoffLock.notifyAll();
+                }
+            }
             return true;
+        } catch (InterruptedException t) {
+            Thread.currentThread().interrupt();
+            return false;
         } catch (Throwable t) {
             WebStreamerMod.LOGGER.debug("[Native] Read frame failed: {}", t.getMessage());
             return false;
@@ -120,10 +162,61 @@ public class NativeFrameGrabber {
     }
 
     /**
-     * Convert I420 to RGB and upload to the GL texture.
+     * Upload the most recently decoded frame to the given GL texture.
+     * Called from the render thread only.
+     *
+     * @param textureId The OpenGL texture ID to upload to.
+     * @return true if a new frame was uploaded.
+     */
+    public boolean uploadPending(int textureId) {
+        synchronized (handoffLock) {
+            if (!pendingNew || pendingSlot < 0) return false;
+
+            ByteBuffer buf = rgbBuffers[pendingSlot];
+            int w = pendingWidth;
+            int h = pendingHeight;
+            if (buf == null || w <= 0 || h <= 0) {
+                pendingNew = false;
+                handoffLock.notifyAll();
+                return false;
+            }
+
+            buf.clear();
+            buf.limit(w * h * 3);
+            buf.position(0);
+
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, textureId);
+            if (w == uploadedTexW && h == uploadedTexH) {
+                GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, w, h,
+                        GL12.GL_BGR, GL11.GL_UNSIGNED_BYTE, buf);
+            } else {
+                GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGB8, w, h, 0,
+                        GL12.GL_BGR, GL11.GL_UNSIGNED_BYTE, buf);
+                uploadedTexW = w;
+                uploadedTexH = h;
+            }
+
+            uploadedPtsUs = pendingPtsUs;
+            pendingNew = false;
+            handoffLock.notifyAll();
+            return true;
+        }
+    }
+
+    /**
+     * PTS (microseconds) of the frame uploaded by the last successful
+     * {@link #uploadPending(int)} call.
+     */
+    public long getUploadedPtsUs() {
+        return uploadedPtsUs;
+    }
+
+    /**
+     * Convert I420 (from {@link #yuvBuffer}) to BGR into the given slot's
+     * pre-allocated buffers. Called from the decode worker thread only.
      * Uses pre-allocated buffers to avoid per-frame GC pressure.
      */
-    private void uploadI420AsRGB(int textureId, int w, int h) {
+    private void convertI420ToRgb(int slot, int w, int h) {
         int ySize = w * h;
         int uvSize = (w / 2) * (h / 2);
         int yuvSize = ySize + uvSize * 2;
@@ -134,11 +227,12 @@ public class NativeFrameGrabber {
             allocYuvSize = yuvSize;
             yuvArray = new byte[allocYuvSize];
         }
-        if (rgbArray == null || allocRgbSize < rgbSize) {
-            allocRgbSize = rgbSize;
-            rgbArray = new byte[allocRgbSize];
-            uploadBuffer = ByteBuffer.allocateDirect(allocRgbSize).order(ByteOrder.nativeOrder());
+        if (rgbArrays[slot] == null || allocRgbSizes[slot] < rgbSize) {
+            allocRgbSizes[slot] = rgbSize;
+            rgbArrays[slot] = new byte[rgbSize];
+            rgbBuffers[slot] = ByteBuffer.allocateDirect(rgbSize).order(ByteOrder.nativeOrder());
         }
+        byte[] rgbArray = rgbArrays[slot];
 
         // Bulk read I420 from native buffer
         yuvBuffer.position(0);
@@ -166,13 +260,11 @@ public class NativeFrameGrabber {
             }
         }
 
-        // Bulk upload to GL
-        uploadBuffer.clear();
-        uploadBuffer.put(rgbArray, 0, rgbSize);
-        uploadBuffer.flip();
-
-        GL11.glBindTexture(GL11.GL_TEXTURE_2D, textureId);
-        GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGB8, w, h, 0, GL12.GL_BGR, GL11.GL_UNSIGNED_BYTE, uploadBuffer);
+        // Bulk copy into the direct buffer the render thread will upload
+        ByteBuffer buf = rgbBuffers[slot];
+        buf.clear();
+        buf.put(rgbArray, 0, rgbSize);
+        buf.flip();
     }
 
     private static int clamp(int v) {
@@ -212,12 +304,19 @@ public class NativeFrameGrabber {
             handle = 0;
         }
         started = false;
-        yuvBuffer = null;
-        yuvArray = null;
-        rgbArray = null;
-        uploadBuffer = null;
-        allocYuvSize = 0;
-        allocRgbSize = 0;
+        synchronized (handoffLock) {
+            yuvBuffer = null;
+            yuvArray = null;
+            rgbArrays[0] = null;
+            rgbArrays[1] = null;
+            rgbBuffers[0] = null;
+            rgbBuffers[1] = null;
+            allocYuvSize = 0;
+            allocRgbSizes[0] = 0;
+            allocRgbSizes[1] = 0;
+            pendingNew = false;
+            handoffLock.notifyAll();
+        }
     }
 
     public boolean isFailed() { return failed; }

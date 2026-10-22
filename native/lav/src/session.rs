@@ -74,6 +74,12 @@ pub struct LavSessions {
 impl LavSessions {
     pub fn new() -> Self {
         let _ = ffmpeg::init();
+        // Silence FFmpeg's own logging. While streaming progressive MP4 the
+        // mov demuxer spams "partial file" (and other INFO/WARNING lines) to
+        // stderr from whichever thread is decoding — flooding the game log and
+        // stalling that thread on pipe/console writes. Real session errors
+        // are surfaced through anyhow -> Java IOExceptions instead.
+        ffmpeg::log::set_level(ffmpeg::log::Level::Quiet);
         Self {
             counter: AtomicI64::new(1),
             sessions: Mutex::new(HashMap::new()),
@@ -197,9 +203,12 @@ impl LavSession {
         let mut decoder = context_decoder.decoder().video()
             .context("failed to create video decoder")?;
 
+        // Many layers can decode concurrently (7+ displays), so keep the frame
+        // threading count per decoder modest to avoid oversubscribing the CPU
+        // (previously num_cpus.min(8) threads for every open layer).
         decoder.set_threading(ffmpeg::threading::Config {
             kind: ffmpeg::threading::Type::Frame,
-            count: num_cpus::get().min(8),
+            count: (num_cpus::get() / 4).clamp(1, 4),
         });
 
         // Determine the pixel format the decoder is actually outputting.

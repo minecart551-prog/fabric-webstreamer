@@ -35,6 +35,15 @@ public final class FFmpegLibrary {
 	/** Whether the native libraries were successfully preloaded. */
 	private static boolean initialized = false;
 
+	/**
+	 * Whether FFmpeg initialization failed irrecoverably for this JVM session.
+	 * A failed class static initializer is sticky (subsequent uses throw
+	 * {@code NoClassDefFoundError}), so retrying and re-logging the full stack
+	 * trace on every call is pointless and, when called from the render thread,
+	 * destroys performance. Once set, all entry points fail fast and silently.
+	 */
+	private static boolean unavailable = false;
+
 	/** Whether the FFmpegFrameGrabber classes were successfully linked. */
 	private static boolean frameGrabberLinked = false;
 
@@ -47,15 +56,18 @@ public final class FFmpegLibrary {
 	 * This method is idempotent and safe to call multiple times and from multiple
 	 * threads.
 	 *
-	 * <p>If the native libraries cannot be loaded (e.g. missing platform binaries),
-	 * the error is logged and the initialization is reset so a later call can retry.
-	 * Note that this only registers/preloads the native libraries; it does not link
-	 * the {@code FFmpegFrameGrabber} classes. Prefer {@link #initializeFrameGrabber()}
-	 * before any decoding work.</p>
+	 * <p>If the natives are not ready yet (e.g. download failed), initialization
+	 * stays retryable. However, if a FFmpeg/JavaCPP class static initializer
+	 * fails, the failure is sticky for the whole JVM session, so it is logged
+	 * once and FFmpeg is marked unavailable: later calls fail fast and silently
+	 * instead of re-running (and re-logging) a doomed initialization every
+	 * frame. Note that this only registers/preloads the native libraries; it
+	 * does not link the {@code FFmpegFrameGrabber} classes. Prefer
+	 * {@link #initializeFrameGrabber()} before any decoding work.</p>
 	 */
 	public static void ensureInitialized() {
 		synchronized (INIT_LOCK) {
-			if (initialized) {
+			if (initialized || unavailable) {
 				return;
 			}
 
@@ -76,18 +88,30 @@ public final class FFmpegLibrary {
 						initialized = true;
 						return;
 					} catch (Throwable e) {
-						WebStreamerMod.LOGGER.error("[FFmpeg] Failed to load native libraries. " +
-								"The files in <" + WebStreamerNativesManager.getNativesSubdir() +
-								">/ may be corrupt or mismatched.", e);
+						// A failure here means a class static initializer already ran
+						// and failed, which is sticky for the whole JVM session: every
+						// later call would throw NoClassDefFoundError no matter what.
+						// Disable FFmpeg and log exactly once instead of retrying (and
+						// re-logging full stack traces) on every caller.
+						unavailable = true;
+						WebStreamerMod.LOGGER.error("[FFmpeg] Failed to load native libraries. The files in <" +
+								WebStreamerNativesManager.getNativesSubdir() +
+								">/ may be corrupt or mismatched. Video/GIF/HLS playback is disabled.", e);
+						return;
 					}
 				}
 			} catch (Throwable e) {
-				WebStreamerMod.LOGGER.error("[FFmpeg] Unexpected error while loading native libraries.", e);
+				// Nothing should reach here (setup/preload handle their own errors),
+				// but if it does, treat it the same as a sticky failure so a broken
+				// environment cannot spam stack traces on every caller.
+				unavailable = true;
+				WebStreamerMod.LOGGER.error("[FFmpeg] Unexpected error while loading native libraries. " +
+						"Video/GIF/HLS playback is disabled.", e);
 			}
 
-			// Keep retryable: a transient failure (e.g. interrupted download) must
-			// not permanently disable FFmpeg for the rest of the session.
-			initialized = false;
+			// Natives were not ready (e.g. download failed): keep retryable, but a
+			// later class-linking failure in initializeFrameGrabber() will disable
+			// further attempts for the rest of the session.
 		}
 	}
 
@@ -111,8 +135,17 @@ public final class FFmpegLibrary {
 			if (frameGrabberLinked) {
 				return true;
 			}
+			if (unavailable) {
+				return false;
+			}
 
 			ensureInitialized();
+
+			// ensureInitialized() may have discovered an unrecoverable failure;
+			// don't attempt (and fail, and log again) class linking in that case.
+			if (unavailable) {
+				return false;
+			}
 
 			try {
 				Class.forName("org.bytedeco.ffmpeg.global.avutil");
@@ -121,11 +154,11 @@ public final class FFmpegLibrary {
 				initialized = true;
 				return true;
 			} catch (Throwable e) {
+				// The classes are now poisoned/sticky in this JVM; disable further
+				// attempts and log exactly once — callers may run every frame.
+				unavailable = true;
 				WebStreamerMod.LOGGER.error("[FFmpeg] Failed to initialize FFmpegFrameGrabber. "
 						+ "Video/GIF/HLS playback is disabled.", e);
-				// The classes are now poisoned/sticky in this JVM; keep
-				// frameGrabberLinked false and don't reset initialized, since
-				// retrying the class linking cannot recover.
 				return false;
 			}
 		}

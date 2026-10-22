@@ -1,0 +1,41 @@
+Starting a Gradle Daemon, 4 stopped Daemons could not be reused, use --status for details
+
+> Configure project :
+Fabric Loom: 1.5.8
+
+> Task :extractIncludeProto UP-TO-DATE
+> Task :extractProto UP-TO-DATE
+> Task :generateProto UP-TO-DATE
+
+> Task :compileJava
+Note: Some input files use or override a deprecated API.
+Note: Recompile with -Xlint:deprecation for details.
+
+> Task :buildNative UP-TO-DATE
+> Task :copyNative UP-TO-DATE
+> Task :processResources UP-TO-DATE
+> Task :classes
+> Task :jar
+> Task :sourcesJar
+> Task :extractIncludeTestProto UP-TO-DATE
+> Task :extractTestProto UP-TO-DATE
+> Task :generateTestProto NO-SOURCE
+> Task :compileTestJava NO-SOURCE
+> Task :processTestResources NO-SOURCE
+> Task :testClasses UP-TO-DATE
+> Task :test NO-SOURCE
+> Task :validateAccessWidener NO-SOURCE
+> Task :check UP-TO-DATE
+> Task :remapJar
+> Task :remapSourcesJar
+> Task :assemble
+> Task :build
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 9.0.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/8.8/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD SUCCESSFUL in 30s
+13 actionable tasks: 5 executed, 8 up-to-date

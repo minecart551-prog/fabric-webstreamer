@@ -26,6 +26,8 @@ import java.nio.ByteOrder;
 import java.nio.ShortBuffer;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
@@ -39,6 +41,17 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     private static final int MAX_FAILED_GRABS = 5;
     private static final int FRAME_BUFFER_POOL_SIZE = 24;
     private static final int FRAME_BUFFER_SIZE = 1 * 1024 * 1024;
+
+    /**
+     * Dedicated daemon thread for closing native decode sessions. nClose can
+     * destroy CUDA/VAAPI contexts (100ms+ of driver work), which must never
+     * happen on the render thread.
+     */
+    private static final ExecutorService NATIVE_CLOSER = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "WebStreamer-native-closer");
+        t.setDaemon(true);
+        return t;
+    });
     /** Cooldown before an automatic restart attempt after a grabber failure. */
     private static final long RESTART_RETRY_INTERVAL_NS = 2L * 1_000_000_000L;
     /** Bounded automatic restart attempts, so a transient failure while the
@@ -51,14 +64,14 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             "Chrome/120.0.0.0 Safari/537.36";
 
     // Native decode path
-    private NativeFrameGrabber nativeGrabber;
-    private boolean useNative = false;
+    private volatile NativeFrameGrabber nativeGrabber;
+    private volatile boolean useNative = false;
 
     // JavaCV decode path
     private FFmpegFrameGrabber grabber;
-    private boolean grabberPending = false;
+    private volatile boolean grabberPending = false;
     private volatile boolean grabberReady   = false;
-    private boolean grabberFailed  = false;
+    private volatile boolean grabberFailed  = false;
     private boolean grabberFailureLogged = false;
     private long lastRestartAttemptNanos = 0;
     private int restartAttempts = 0;
@@ -67,6 +80,12 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
     private long lastTickNanos  = 0;
     private long playbackMicros = 0;
+
+    // Native path: pts bookkeeping for the playback clock (render thread) and
+    // pacing state for the decode worker (decode thread only).
+    private long lastNativePtsUs = 0;
+    private long pacedPtsUs = -1;
+    private long pacedWallNanos = 0;
 
     private boolean audioInRange = true;
     private ShortBuffer tempAudioBuffer;
@@ -252,8 +271,10 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             // Enable rolling packet cache for seeking (30s, 32MB)
             ng.enableCache(30_000_000L, 32 * 1024 * 1024);
 
-            if (this.destroyed) {
+            if (this.destroyed || this.decodeFinished) {
+                // Layer was stopped while the open was in flight.
                 ng.close();
+                this.grabberPending = false;
                 return;
             }
 
@@ -287,6 +308,105 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         }
     }
 
+    /**
+     * Open the native grabber (blocking network I/O) and then run the decode
+     * loop on a background thread. Called from {@link #tick()} on the render
+     * thread, which only spawns the thread — the open itself used to run
+     * synchronously here and was the single largest source of frame stalls
+     * (Spark: ~19% of the render thread in avformat_open_input + TLS).
+     */
+    private void startNativeSetup() {
+        if (this.destroyed) {
+            this.grabberPending = false;
+            return;
+        }
+        this.decodeThread = new Thread(() -> {
+            FFmpegFrameGrabber localGrabber = null;
+            try {
+                // Blocking network open (DNS/TLS/avformat) happens here.
+                startNativeGrabber();
+                localGrabber = this.grabber;
+                if (this.destroyed) {
+                    return;
+                }
+                if (this.grabberReady && this.useNative && !this.decodeFinished) {
+                    nativeDecodeLoop();
+                } else if (this.grabberReady && !this.useNative) {
+                    // Native open failed and fell back to the JavaCV path.
+                    backgroundDecodeLoop();
+                } else if (this.grabberPending && !this.grabberFailed) {
+                    // Nothing was started (e.g. stopped while opening); let
+                    // the next tick retry.
+                    this.grabberPending = false;
+                }
+            } finally {
+                if (localGrabber != null && (this.destroyed || this.decodeFinished)) {
+                    try { localGrabber.releaseUnsafe(); } catch (Exception ignored) { }
+                }
+            }
+        }, "WebStreamer-decode-" + Integer.toHexString(System.identityHashCode(this)));
+        this.decodeThread.setDaemon(true);
+        this.decodeThread.start();
+    }
+
+    /**
+     * Background decode loop for the native path: reads frames (blocking
+     * network + decode), converts I420 to BGR off-thread, and publishes them
+     * for the render thread to upload. Paces itself to the stream's frame
+     * rate and pauses while the layer is not visible (matching
+     * visible-upload-only) or while a decoded frame has not been consumed.
+     */
+    private void nativeDecodeLoop() {
+        try {
+            while (!this.destroyed && this.useNative && this.grabberReady
+                    && this.nativeGrabber != null && !this.decodeFinished) {
+                NativeFrameGrabber ng = this.nativeGrabber;
+                if (ng == null) {
+                    break;
+                }
+
+                if (WebStreamerConfig.isVisibleUploadOnly() && !this.isVisible()) {
+                    Thread.sleep(50);
+                    continue;
+                }
+
+                if (!ng.decodeToPending()) {
+                    // No frame this pass (end of stream / transient error is
+                    // handled inside); avoid busy-spinning.
+                    Thread.sleep(10);
+                    continue;
+                }
+
+                // Pace decoding to the stream's frame rate so this thread
+                // doesn't decode faster than realtime.
+                long ptsUs = ng.getLastPtsUs();
+                long now = System.nanoTime();
+                if (this.pacedPtsUs >= 0) {
+                    long deltaUs = ptsUs - this.pacedPtsUs;
+                    if (deltaUs >= 1_000L && deltaUs <= 500_000L) {
+                        long target = this.pacedWallNanos + deltaUs * 1_000L;
+                        if (target > now) {
+                            long remaining = target - now;
+                            Thread.sleep(remaining / 1_000_000L, (int) (remaining % 1_000_000L));
+                        }
+                    } else if (deltaUs < 1_000L) {
+                        // Nonsensical pts delta: still throttle to avoid spinning.
+                        Thread.sleep(5);
+                    }
+                }
+                this.pacedPtsUs = ptsUs;
+                this.pacedWallNanos = System.nanoTime();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            if (!this.destroyed) {
+                WebStreamerMod.LOGGER.error(makeLog("Background native decode failed"), e);
+                this.grabberFailed = true;
+            }
+        }
+    }
+
     private void tickNative() {
         long now = System.nanoTime();
 
@@ -309,36 +429,32 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             this.audioSource.playFromTimestamp(this.refTimestamp + this.playbackMicros);
         }
 
+        NativeFrameGrabber ng = this.nativeGrabber;
+        if (ng == null) {
+            return;
+        }
+
         try {
+            // Decoding + I420->BGR conversion run on the background decode
+            // thread (nativeDecodeLoop); the render thread only uploads the
+            // frame that is already converted.
             boolean uploadVisible = !WebStreamerConfig.isVisibleUploadOnly() || this.isVisible();
-
-            if (uploadVisible) {
-                long prevPts = this.nativeGrabber.getLastPtsUs();
-                boolean gotFrame = this.nativeGrabber.readAndUpload(this.tex.getGlId());
-                if (gotFrame) {
-                    if (!this.linearFilterApplied) {
-                        this.linearFilterApplied = true;
-                        this.tex.setLinearFilter();
-                    }
-                    long newPts = this.nativeGrabber.getLastPtsUs();
-                    if (newPts > prevPts && prevPts >= 0) {
-                        this.playbackMicros = newPts;
-                    } else {
-                        this.playbackMicros += 33_333;
-                    }
+            if (uploadVisible && ng.uploadPending(this.tex.getGlId())) {
+                if (!this.linearFilterApplied) {
+                    this.linearFilterApplied = true;
+                    this.tex.setLinearFilter();
                 }
+                long prevPts = this.lastNativePtsUs;
+                long newPts = ng.getUploadedPtsUs();
+                if (newPts > prevPts && prevPts >= 0) {
+                    this.playbackMicros = newPts;
+                } else {
+                    this.playbackMicros += 33_333;
+                }
+                this.lastNativePtsUs = newPts;
             }
-
         } catch (Exception e) {
-            this.failedGrabs++;
-            WebStreamerMod.LOGGER.error(makeLog("Native frame read failed ({}/{})."),
-                    this.failedGrabs, MAX_FAILED_GRABS, e);
-            if (this.failedGrabs >= MAX_FAILED_GRABS) {
-                WebStreamerMod.LOGGER.error(makeLog("Too many failed grabs, marking layer as lost."));
-                this.stopGrabber();
-                this.grabberFailed = true;
-                this.audioSource.stop();
-            }
+            WebStreamerMod.LOGGER.debug(makeLog("Native upload failed: {}"), e.getMessage());
         }
     }
 
@@ -570,12 +686,19 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         }
         this.decodeFinished = true;
 
-        // Stop native grabber
-        if (this.nativeGrabber != null) {
-            this.nativeGrabber.kill();
-            this.nativeGrabber.close();
-            this.nativeGrabber = null;
-            this.useNative = false;
+        // Stop native grabber: kill immediately (non-blocking interrupt flag),
+        // then close off the render thread — nClose may destroy a CUDA/VAAPI
+        // context, which costs 100ms+ of driver time.
+        NativeFrameGrabber ng = this.nativeGrabber;
+        this.nativeGrabber = null;
+        this.useNative = false;
+        if (ng != null) {
+            ng.kill();
+            NATIVE_CLOSER.execute(() -> {
+                try {
+                    ng.close();
+                } catch (Throwable ignored) {}
+            });
         }
 
         // Stop JavaCV grabber
@@ -737,14 +860,15 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             return;
         }
 
-        // Start native grabber on first tick
+        // Start grabber on first tick. The native open performs blocking
+        // network I/O (DNS/TLS/avformat), so it runs on a background thread —
+        // on the render thread it caused multi-hundred-ms stalls on every
+        // video start, playlist advance and layer rebuild.
         if (!this.grabberPending && !this.grabberReady && !this.decodeFinished) {
             this.grabberPending = true;
             if (NativeLibrary.isAvailable()) {
-                // Native path: open on render thread (fast, no blocking I/O)
-                this.startNativeGrabber();
+                this.startNativeSetup();
             } else {
-                // JavaCV path: spawn background thread
                 this.startSetup();
             }
             return;

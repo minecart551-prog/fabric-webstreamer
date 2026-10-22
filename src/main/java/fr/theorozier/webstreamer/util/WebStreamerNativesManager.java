@@ -250,12 +250,23 @@ public final class WebStreamerNativesManager {
                         System.load(lib.toAbsolutePath().toString());
                         it.remove();
                         loaded++;
-                        // Track JNI library names for Loader registration below
+                        // Track JNI library names for Loader registration below.
+                        // The Loader key is the short library name without the platform
+                        // naming style: Windows is "jniavutil.dll", but Linux/macOS use
+                        // the "lib" prefix ("libjniavutil.so"), so strip both the "lib"
+                        // prefix and any extension (including versioned ".so.N") before
+                        // checking for the "jni" prefix.
                         String name = lib.getFileName().toString();
-                        if (name.startsWith("jni")) {
-                            // Strip extension to get the Loader key (e.g. "jniavutil")
-                            int dot = name.indexOf('.');
-                            loadedJniLibs.add(dot > 0 ? name.substring(0, dot) : name);
+                        String base = name;
+                        int dot = base.indexOf('.');
+                        if (dot > 0) {
+                            base = base.substring(0, dot);
+                        }
+                        if (base.startsWith("lib") && base.length() > 3) {
+                            base = base.substring(3);
+                        }
+                        if (base.startsWith("jni")) {
+                            loadedJniLibs.add(base);
                         }
                         WebStreamerMod.LOGGER.info("[WebStreamer]   [round {}] Loaded: {}",
                                 round, name);
