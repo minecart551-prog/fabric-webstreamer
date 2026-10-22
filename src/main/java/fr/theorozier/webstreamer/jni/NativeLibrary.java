@@ -11,6 +11,7 @@ import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.zip.CRC32;
 
 /**
  * Loads the WebStreamer native library (Rust cdylib) from disk or extracts
@@ -45,26 +46,41 @@ public final class NativeLibrary {
             Path nativesDir = FabricLoader.getInstance().getGameDir().resolve(NATIVES_SUBDIR);
             String libFileName = mapLibraryName(LIB_NAME);
             Path libPath = nativesDir.resolve(libFileName);
+            String resourcePath = "/natives/" + libFileName;
 
-            // Try to load from disk first
-            if (Files.exists(libPath)) {
-                System.load(libPath.toAbsolutePath().toString());
-            } else {
-                // Try to extract from mod JAR
-                String resourcePath = "/natives/" + libFileName;
-                try (InputStream is = NativeLibrary.class.getResourceAsStream(resourcePath)) {
-                    if (is != null) {
-                        Files.createDirectories(nativesDir);
-                        Path tempPath = nativesDir.resolve(libFileName + ".tmp");
-                        Files.copy(is, tempPath, StandardCopyOption.REPLACE_EXISTING);
-                        Files.move(tempPath, libPath, StandardCopyOption.REPLACE_EXISTING);
-                        System.load(libPath.toAbsolutePath().toString());
-                    } else {
-                        WebStreamerMod.LOGGER.info("[Native] Native library not found in JAR or disk");
-                        return;
-                    }
+            // Read the copy bundled in the mod JAR (may be absent).
+            byte[] jarBytes = null;
+            try (InputStream is = NativeLibrary.class.getResourceAsStream(resourcePath)) {
+                if (is != null) {
+                    jarBytes = is.readAllBytes();
                 }
             }
+
+            if (jarBytes != null && !diskMatchesJar(libPath, jarBytes)) {
+                // The on-disk copy is stale (mod JAR updated but an older
+                // native survived from a previous version): re-extract it,
+                // otherwise old natives would shadow new ones forever.
+                Files.createDirectories(nativesDir);
+                Path tempPath = nativesDir.resolve(libFileName + ".tmp." + ProcessHandle.current().pid());
+                try {
+                    Files.write(tempPath, jarBytes);
+                    Files.move(tempPath, libPath, StandardCopyOption.REPLACE_EXISTING);
+                    WebStreamerMod.LOGGER.info("[Native] Refreshed stale {} from mod JAR", libFileName);
+                } catch (IOException e) {
+                    // Probably locked by another running game instance —
+                    // fall back to the existing on-disk copy if there is one.
+                    Files.deleteIfExists(tempPath);
+                    if (!Files.exists(libPath)) {
+                        throw e;
+                    }
+                    WebStreamerMod.LOGGER.warn("[Native] Could not refresh {}, using existing on-disk copy", libFileName, e);
+                }
+            } else if (jarBytes == null && !Files.exists(libPath)) {
+                WebStreamerMod.LOGGER.info("[Native] Native library not found in JAR or disk");
+                return;
+            }
+
+            System.load(libPath.toAbsolutePath().toString());
 
             // Verify ABI version
             abiVersion = nAbiVersion();
@@ -127,6 +143,32 @@ public final class NativeLibrary {
             return "lib" + name + ".dylib";
         } else {
             return "lib" + name + ".so";
+        }
+    }
+
+    /**
+     * Whether the on-disk library is byte-identical to the JAR copy (compares
+     * size first, then CRC32 — the files are at most a few MB, so this is
+     * negligible at startup).
+     */
+    private static boolean diskMatchesJar(Path libPath, byte[] jarBytes) {
+        try {
+            if (!Files.exists(libPath) || Files.size(libPath) != jarBytes.length) {
+                return false;
+            }
+            CRC32 jarCrc = new CRC32();
+            jarCrc.update(jarBytes);
+            CRC32 diskCrc = new CRC32();
+            byte[] chunk = new byte[64 * 1024];
+            try (InputStream in = Files.newInputStream(libPath)) {
+                int n;
+                while ((n = in.read(chunk)) > 0) {
+                    diskCrc.update(chunk, 0, n);
+                }
+            }
+            return jarCrc.getValue() == diskCrc.getValue();
+        } catch (IOException e) {
+            return false;
         }
     }
 }
