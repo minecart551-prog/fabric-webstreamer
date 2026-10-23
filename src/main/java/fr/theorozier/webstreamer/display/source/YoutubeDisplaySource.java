@@ -283,10 +283,10 @@ public class YoutubeDisplaySource extends DisplaySource {
             WebStreamerMod.LOGGER.debug("YouTube getUri for '{}' quality '{}' → {}", id, this.quality, q.uri());
             return q.uri();
         } catch (YoutubeClient.YoutubeException e) {
-            WebStreamerMod.LOGGER.error("Failed to get YouTube URI for '{}': {}", id, e.getMessage());
+            WebStreamerConfig.debugWarn("Failed to get YouTube URI for '{}': {}", id, e.getMessage());
             return null;
         } catch (Exception e) {
-            WebStreamerMod.LOGGER.error("Unexpected error getting YouTube URI for '{}': {}", id, e.getMessage());
+            WebStreamerConfig.debugWarn("Unexpected error getting YouTube URI for '{}': {}", id, e.getMessage());
             return null;
         }
     }

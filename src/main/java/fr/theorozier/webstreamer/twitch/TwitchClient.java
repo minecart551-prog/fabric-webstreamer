@@ -7,6 +7,7 @@ import com.google.gson.JsonObject;
 import fr.theorozier.webstreamer.WebStreamerMod;
 import fr.theorozier.webstreamer.playlist.Playlist;
 import fr.theorozier.webstreamer.playlist.PlaylistQuality;
+import fr.theorozier.webstreamer.util.WebStreamerConfig;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 
@@ -73,7 +74,7 @@ public class TwitchClient {
 	 */
 	private Playlist requestPlaylistInternal(String channel) throws PlaylistException, IOException, URISyntaxException, InterruptedException {
 		if (channel.isEmpty()) {
-			WebStreamerMod.LOGGER.warn("Twitch playlist request failed: empty channel");
+			WebStreamerConfig.debugWarn("Twitch playlist request failed: empty channel");
 			throw new PlaylistException(PlaylistExceptionType.CHANNEL_NOT_FOUND);
 		}
 
@@ -110,7 +111,7 @@ public class TwitchClient {
 		HttpResponse<String> tokenRes = client.send(tokenReq, HttpResponse.BodyHandlers.ofString());
 
 		if (tokenRes.statusCode() != 200) {
-			WebStreamerMod.LOGGER.warn("Twitch PlaybackAccessToken request failed status={} body={}", tokenRes.statusCode(), tokenRes.body());
+			WebStreamerConfig.debugWarn("Twitch PlaybackAccessToken request failed status={} body={}", tokenRes.statusCode(), tokenRes.body());
 			throw new PlaylistException(PlaylistExceptionType.NO_TOKEN);
 		}
 
@@ -120,7 +121,7 @@ public class TwitchClient {
 				: null;
 		JsonElement tokenRaw = tokenResData == null ? null : tokenResData.get("streamPlaybackAccessToken");
 		if (tokenRaw == null || !tokenRaw.isJsonObject()) {
-			WebStreamerMod.LOGGER.warn("Twitch PlaybackAccessToken response missing token object for channel={} body={}", channel, tokenRes.body());
+			WebStreamerConfig.debugWarn("Twitch PlaybackAccessToken response missing token object for channel={} body={}", channel, tokenRes.body());
 			throw new PlaylistException(PlaylistExceptionType.CHANNEL_NOT_FOUND);
 		}
 
@@ -158,7 +159,7 @@ public class TwitchClient {
 			int qualityNameStartIdx = line2.indexOf("NAME=\"");
 			int qualityNameStopIdx = line2.indexOf('"', qualityNameStartIdx + 6);
 			if (qualityNameStartIdx < 0 || qualityNameStopIdx < 0) {
-				WebStreamerMod.LOGGER.warn("Twitch playlist parse failed for channel={} line={} content={}", channel, i - 2, line2);
+				WebStreamerConfig.debugWarn("Twitch playlist parse failed for channel={} line={} content={}", channel, i - 2, line2);
 				continue;
 			}
 			String qualityName = line2.substring(qualityNameStartIdx + 6, qualityNameStopIdx);

@@ -302,7 +302,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             this.restartAttempts = 0;
             this.lastRestartAttemptNanos = 0;
 
-            WebStreamerMod.LOGGER.info(makeLog("Native decoder opened for {}"), this.currentUri);
+            WebStreamerConfig.debugLog(makeLog("Native decoder opened for {}"), this.currentUri);
 
             // Pre-fetch next playlist video
             if (this.display != null) {

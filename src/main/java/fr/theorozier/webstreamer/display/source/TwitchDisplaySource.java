@@ -1,10 +1,10 @@
 package fr.theorozier.webstreamer.display.source;
 
 import fr.theorozier.webstreamer.WebStreamerClientMod;
-import fr.theorozier.webstreamer.WebStreamerMod;
 import fr.theorozier.webstreamer.playlist.Playlist;
 import fr.theorozier.webstreamer.playlist.PlaylistQuality;
 import fr.theorozier.webstreamer.twitch.TwitchClient;
+import fr.theorozier.webstreamer.util.WebStreamerConfig;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtString;
 
@@ -97,7 +97,7 @@ public class TwitchDisplaySource extends DisplaySource {
                 // would otherwise spam the log every retry.
                 if (!this.loggedResolveFailure) {
                     this.loggedResolveFailure = true;
-                    WebStreamerMod.LOGGER.warn("Twitch playlist future failed for channel={}", this.channel, e);
+                    WebStreamerConfig.debugWarn("Twitch playlist future failed for channel={}", this.channel, e);
                 }
             }
         }
