@@ -24,6 +24,7 @@ import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.ShortBuffer;
+import java.util.Arrays;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
@@ -81,12 +82,6 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     private long lastTickNanos  = 0;
     private long playbackMicros = 0;
 
-    // Native path: pts bookkeeping for the playback clock (render thread) and
-    // pacing state for the decode worker (decode thread only).
-    private long lastNativePtsUs = 0;
-    private long pacedPtsUs = -1;
-    private long pacedWallNanos = 0;
-
     private boolean audioInRange = true;
     private ShortBuffer tempAudioBuffer;
     private ByteBuffer tempAudioByteBuf;
@@ -104,6 +99,9 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     private volatile boolean decodeFinished = false;
     private long lastDecodedAudioTs = 0;
     private boolean linearFilterApplied = false;
+    // Scratch for draining native-decoded PCM on the decode worker thread;
+    // sized to tempAudioByteBuf (8192 bytes = 4096 shorts).
+    private final short[] nativeAudioScratch = new short[4096];
 
     private static class RawAudioChunk {
         final short[] pcm;
@@ -201,6 +199,12 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         return this.decodeFinished;
     }
 
+    /** Whether the layer currently decodes through the native (Rust/FFmpeg)
+     * path rather than the JavaCV fallback — shown in the debug overlay. */
+    public boolean isUsingNative() {
+        return this.useNative;
+    }
+
     public int getFailedGrabs() {
         return this.failedGrabs;
     }
@@ -284,6 +288,14 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             this.playbackMicros = 0;
             this.lastTickNanos = System.nanoTime();
             this.lastDecodedAudioTs = 0;
+
+            // Audio plumbing (the native backend feeds pendingAudioChunks
+            // from its decode loop, drained in tickNative).
+            AudioStreamingBuffer.resetTimestampTracker();
+            this.tempAudioBuffer = this.res.allocAudioBuffer();
+            this.tempAudioByteBuf = ByteBuffer.allocateDirect(8192)
+                    .order(ByteOrder.LITTLE_ENDIAN);
+
             this.grabberReady = true;
             this.grabberPending = false;
             this.failedGrabs = 0;
@@ -352,11 +364,17 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     /**
      * Background decode loop for the native path: reads frames (blocking
      * network + decode), converts I420 to BGR off-thread, and publishes them
-     * for the render thread to upload. Paces itself to the stream's frame
-     * rate and pauses while the layer is not visible (matching
-     * visible-upload-only) or while a decoded frame has not been consumed.
+     * for the render thread to upload. Runs ahead of playback up to the
+     * grabber's decode-ahead queue depth (the queue is the backpressure), and
+     * pauses while the layer is not visible (matching visible-upload-only).
      */
     private void nativeDecodeLoop() {
+        // decodeToPending() returns false only on abnormal conditions (IO/JNI
+        // error, end of stream, closed handle) — count consecutive failures so
+        // real problems surface as grabber failures (which log + restart)
+        // instead of leaving the display black forever, matching what the old
+        // render-thread path did via failedGrabs.
+        int consecutiveFailures = 0;
         try {
             while (!this.destroyed && this.useNative && this.grabberReady
                     && this.nativeGrabber != null && !this.decodeFinished) {
@@ -370,32 +388,34 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                     continue;
                 }
 
+                // Collect audio decoded alongside the video packets (the
+                // native backend interleaves audio into the same read loop).
+                drainNativeAudio();
+
                 if (!ng.decodeToPending()) {
+                    if (++consecutiveFailures >= MAX_FAILED_GRABS) {
+                        if (this.grabberReady && !this.destroyed && !this.decodeFinished) {
+                            WebStreamerMod.LOGGER.error(makeLog(
+                                    "Native decode failed {} consecutive times, marking grabber as failed."),
+                                    consecutiveFailures);
+                            this.grabberFailed = true;
+                        }
+                        break;
+                    }
                     // No frame this pass (end of stream / transient error is
                     // handled inside); avoid busy-spinning.
                     Thread.sleep(10);
                     continue;
                 }
+                consecutiveFailures = 0;
 
-                // Pace decoding to the stream's frame rate so this thread
-                // doesn't decode faster than realtime.
-                long ptsUs = ng.getLastPtsUs();
-                long now = System.nanoTime();
-                if (this.pacedPtsUs >= 0) {
-                    long deltaUs = ptsUs - this.pacedPtsUs;
-                    if (deltaUs >= 1_000L && deltaUs <= 500_000L) {
-                        long target = this.pacedWallNanos + deltaUs * 1_000L;
-                        if (target > now) {
-                            long remaining = target - now;
-                            Thread.sleep(remaining / 1_000_000L, (int) (remaining % 1_000_000L));
-                        }
-                    } else if (deltaUs < 1_000L) {
-                        // Nonsensical pts delta: still throttle to avoid spinning.
-                        Thread.sleep(5);
-                    }
-                }
-                this.pacedPtsUs = ptsUs;
-                this.pacedWallNanos = System.nanoTime();
+                // No wall-clock pacing here: backpressure comes from the
+                // grabber's decode-ahead queue (decodeToPending blocks when
+                // full). Decoding faster than realtime while the queue has
+                // room is intentional — it builds the cushion of decoded
+                // frames and audio PCM that keeps the OpenAL sink fed through
+                // render/network hitches (single-slot + pts pacing starved
+                // it, causing choppy audio).
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -404,6 +424,9 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 WebStreamerMod.LOGGER.error(makeLog("Background native decode failed"), e);
                 this.grabberFailed = true;
             }
+        } finally {
+            // Queue whatever audio is still buffered (end of stream / stop).
+            drainNativeAudio();
         }
     }
 
@@ -434,27 +457,70 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             return;
         }
 
+        // Audio-master sync (mirrors tickJavaCV): the audio sink plays its
+        // queued PCM continuously, so its clock is the most stable timeline —
+        // when it runs ahead of the video clock, yank the video clock forward.
+        if (this.audioSource != null && this.audioSource.isPlaying() && this.refTimestamp >= 0 && !shouldPause) {
+            long audioTs = this.audioSource.getEstimatedPlaybackTimestamp();
+            if (audioTs > 0) {
+                long audioRelative = audioTs - this.refTimestamp;
+                long diff = audioRelative - this.playbackMicros;
+                if (diff > 50000L) {
+                    this.playbackMicros = audioRelative;
+                    WebStreamerMod.LOGGER.debug(makeLog("Synced native video clock to audio at {} (diff={}us)"), audioRelative, diff);
+                }
+            }
+        }
+
         try {
-            // Decoding + I420->BGR conversion run on the background decode
-            // thread (nativeDecodeLoop); the render thread only uploads the
-            // frame that is already converted.
+            // Frames are decoded ahead on the background thread into a bounded
+            // queue (like the JavaCV path's buffer pool); the render thread
+            // only uploads frames whose pts the clock has reached, dropping
+            // superseded ones to catch up.
             boolean uploadVisible = !WebStreamerConfig.isVisibleUploadOnly() || this.isVisible();
-            if (uploadVisible && ng.uploadPending(this.tex.getGlId())) {
-                if (!this.linearFilterApplied) {
-                    this.linearFilterApplied = true;
-                    this.tex.setLinearFilter();
+            if (ng.uploadPending(this.tex.getGlId(), this.playbackMicros, uploadVisible)) {
+                if (uploadVisible) {
+                    // The native path uploads through raw GL and bypasses
+                    // DisplayTexture.uploadRaw, so mirror the uploaded size here —
+                    // without this the texture never reports isReady() and the
+                    // renderer skips drawing the video quad entirely.
+                    this.tex.markReady(ng.getUploadedWidth(), ng.getUploadedHeight(), GL11.GL_RGB8);
+                    if (!this.linearFilterApplied) {
+                        this.linearFilterApplied = true;
+                        this.tex.setLinearFilter();
+                    }
                 }
-                long prevPts = this.lastNativePtsUs;
-                long newPts = ng.getUploadedPtsUs();
-                if (newPts > prevPts && prevPts >= 0) {
-                    this.playbackMicros = newPts;
-                } else {
-                    this.playbackMicros += 33_333;
-                }
-                this.lastNativePtsUs = newPts;
+                this.playbackMicros = ng.getUploadedPtsUs();
             }
         } catch (Exception e) {
             WebStreamerMod.LOGGER.debug(makeLog("Native upload failed: {}"), e.getMessage());
+        }
+
+        // Queue pending audio chunks and keep audio playback running, same as
+        // the JavaCV path (the native decode loop feeds the same queue).
+        if (this.tempAudioByteBuf != null && this.tempAudioBuffer != null) {
+            int audioBuffersQueued = 0;
+            try {
+                ShortBuffer audioDataShort = this.tempAudioByteBuf.asShortBuffer();
+                RawAudioChunk chunk;
+                while ((chunk = this.pendingAudioChunks.poll()) != null) {
+                    audioDataShort.clear();
+                    audioDataShort.put(chunk.pcm);
+                    audioDataShort.flip();
+                    AudioStreamingBuffer audioBuf = AudioStreamingBuffer.fromRawData(
+                            this.tempAudioBuffer, audioDataShort,
+                            1, chunk.sampleRate, chunk.timestamp);
+                    if (audioBuf != null) {
+                        this.audioSource.queueBuffer(audioBuf);
+                        audioBuffersQueued++;
+                    }
+                }
+            } catch (Exception e) {
+                WebStreamerConfig.debugLog(makeLog("Native audio drain failed: {}"), e.getMessage());
+            }
+            if (audioBuffersQueued > 0) {
+                this.audioSource.playFrom(this.refTimestamp + this.playbackMicros);
+            }
         }
     }
 
@@ -680,6 +746,35 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         this.pendingAudioChunks.add(new RawAudioChunk(pcm, sampleRate, samples, timestamp, duration));
     }
 
+    /**
+     * Drain native-decoded PCM (the lav backend resamples audio to mono S16
+     * at the source rate) into pendingAudioChunks, applying the same
+     * monotonic pts clamp as {@link #handleAudioFrame}. Called from the
+     * decode worker thread.
+     */
+    private void drainNativeAudio() {
+        NativeFrameGrabber ng = this.nativeGrabber;
+        if (ng == null) {
+            return;
+        }
+        long[] info = new long[2];
+        int samples;
+        while ((samples = ng.readAudio(this.nativeAudioScratch, info)) > 0) {
+            int sampleRate = (int) info[1];
+            if (sampleRate <= 0) {
+                break;
+            }
+            long timestamp = info[0];
+            long duration = samples * 1000000L / sampleRate;
+            if (timestamp <= this.lastDecodedAudioTs || timestamp < 0) {
+                timestamp = this.lastDecodedAudioTs + duration;
+            }
+            this.lastDecodedAudioTs = timestamp;
+            short[] pcm = Arrays.copyOf(this.nativeAudioScratch, samples);
+            this.pendingAudioChunks.add(new RawAudioChunk(pcm, sampleRate, samples, timestamp, duration));
+        }
+    }
+
     private void stopGrabber() {
         if (!this.grabberReady && !this.grabberPending) {
             return;
@@ -754,7 +849,13 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             this.stopGrabber();
             this.decodeFinished = false;
             this.grabberPending = true;
-            this.startSetup();
+            // Restart through the native path when available (it now carries
+            // audio too); startNativeSetup falls back to JavaCV on failure.
+            if (NativeLibrary.isAvailable()) {
+                this.startNativeSetup();
+            } else {
+                this.startSetup();
+            }
             return RESTART_RESTARTED;
         }
 
@@ -792,7 +893,13 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             this.stopGrabber();
             this.decodeFinished = false;
             this.grabberPending = true;
-            this.startSetup();
+            // Restart through the native path when available (it now carries
+            // audio too); startNativeSetup falls back to JavaCV on failure.
+            if (NativeLibrary.isAvailable()) {
+                this.startNativeSetup();
+            } else {
+                this.startSetup();
+            }
             return RESTART_RESTARTED;
         }
 

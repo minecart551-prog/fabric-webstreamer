@@ -28,7 +28,7 @@ pub extern "system" fn Java_fr_theorozier_webstreamer_jni_NativeLibrary_nAbiVers
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jlong {
-    6
+    7
 }
 
 #[no_mangle]
@@ -93,6 +93,43 @@ pub extern "system" fn Java_fr_theorozier_webstreamer_jni_NativeLibrary_nReadFra
                 return -1;
             }
             frame.data_len as jlong
+        }
+        Err(e) => {
+            let _ = env.throw_new("java/io/IOException", e.to_string());
+            -1
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_fr_theorozier_webstreamer_jni_NativeLibrary_nReadAudioPcm<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    buf: jni::sys::jobject,
+    buf_len: jint,
+    out_info: jlongArray,
+) -> jlong {
+    let session = match get_sessions().get(handle) {
+        Some(s) => s,
+        None => return -1,
+    };
+
+    let byte_buf = unsafe { JByteBuffer::from_raw(buf) };
+    let buf_ptr = match env.get_direct_buffer_address(&byte_buf) {
+        Ok(p) => p as *mut u8,
+        Err(_) => return -1,
+    };
+    let buf_len = buf_len as usize;
+
+    match session.read_audio_pcm(buf_ptr, buf_len) {
+        Ok((len, pts_us, rate)) => {
+            let info_array = unsafe { JLongArray::from_raw(out_info) };
+            let info_slice = [pts_us, rate as jlong];
+            if env.set_long_array_region(&info_array, 0, &info_slice).is_err() {
+                return -1;
+            }
+            len as jlong
         }
         Err(e) => {
             let _ = env.throw_new("java/io/IOException", e.to_string());

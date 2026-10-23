@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -119,6 +119,11 @@ struct SessionInner {
     video_stream_index: Option<usize>,
     decoder: Option<ffmpeg::decoder::Video>,
     scaler: Option<ffmpeg::software::scaling::Context>,
+    /// Format/size the current scaler was built for; the scaler is (re)created
+    /// lazily whenever a decoded frame doesn't match (e.g. hardware decode
+    /// transfers VAAPI/D3D11 frames to NV12 while the codec default used at
+    /// open time is YUV420P — sws returns AVERROR_INPUT_CHANGED on mismatch).
+    scaler_src: Option<(ffmpeg::format::Pixel, u32, u32)>,
     sw_frame: ffmpeg::frame::Video,
     hw_frame: ffmpeg::frame::Video,
     frame_count: u64,
@@ -127,6 +132,109 @@ struct SessionInner {
     hw_backend: HwBackend,
     hw_device_ctx: Option<*mut sys::AVBufferRef>,
     hw_pix_fmt: Option<sys::AVPixelFormat>,
+    audio: Option<AudioState>,
+}
+
+/// Audio decode + resample state for a session. Audio packets are fed while
+/// reading video frames (they are interleaved in the container), resampled to
+/// interleaved S16 mono at the source rate, and buffered for Java to drain.
+struct AudioState {
+    decoder: ffmpeg::decoder::Audio,
+    stream_index: usize,
+    time_base: ffmpeg::Rational,
+    /// Lazy-created swresample context: decoder format -> S16 packed mono at
+    /// the source sample rate (the JavaCV path delivers mono short PCM at the
+    /// stream's rate too).
+    resampler: Option<ffmpeg::software::resampling::Context>,
+    /// Resampled interleaved S16 mono bytes waiting to be drained by Java.
+    ring: VecDeque<u8>,
+    /// PTS (µs) of the sample at the head of the ring.
+    ring_pts_f64: f64,
+    /// Sample rate of the resampled output.
+    out_rate: i32,
+}
+
+impl AudioState {
+    /// Feed one demuxed audio packet and collect any decoded PCM.
+    fn feed(&mut self, packet: &ffmpeg::Packet) {
+        if self.decoder.send_packet(packet).is_err() {
+            return;
+        }
+        self.drain_frames();
+    }
+
+    /// Drop all buffered state after a seek.
+    fn on_seek(&mut self) {
+        self.decoder.flush();
+        self.ring.clear();
+        self.ring_pts_f64 = 0.0;
+    }
+
+    /// Decode delayed frames still buffered in the decoder (end of stream).
+    fn drain_at_eof(&mut self) {
+        let _ = self.decoder.send_eof();
+        self.drain_frames();
+    }
+
+    fn drain_frames(&mut self) {
+        loop {
+            let mut frame = ffmpeg::frame::Audio::empty();
+            match self.decoder.receive_frame(&mut frame) {
+                Ok(()) => self.resample_into_ring(&mut frame),
+                Err(ffmpeg::Error::Other { errno: ffmpeg::error::EAGAIN }) => break,
+                Err(ffmpeg::Error::Eof) => break,
+                Err(e) => {
+                    log::warn!("Session audio: receive_frame failed: {e}");
+                    break;
+                }
+            }
+        }
+    }
+
+    fn resample_into_ring(&mut self, frame: &mut ffmpeg::frame::Audio) {
+        let in_fmt = frame.format();
+        let in_layout = frame.channel_layout();
+        let in_rate = frame.rate();
+        if in_rate == 0 {
+            return;
+        }
+        if self.resampler.is_none() {
+            match ffmpeg::software::resampling::Context::get(
+                in_fmt,
+                in_layout,
+                in_rate,
+                ffmpeg::format::Sample::I16(ffmpeg::format::sample::Type::Packed),
+                ffmpeg::channel_layout::ChannelLayout::MONO,
+                in_rate,
+            ) {
+                Ok(ctx) => {
+                    self.resampler = Some(ctx);
+                    self.out_rate = in_rate as i32;
+                }
+                Err(e) => {
+                    log::warn!("Session audio: resampler create failed: {e}");
+                    return;
+                }
+            }
+        }
+
+        let pts_us = self.time_base.pts_us(frame.pts().unwrap_or(0));
+        let mut out = ffmpeg::frame::Audio::empty();
+        if let Err(e) = self.resampler.as_mut().unwrap().run(frame, &mut out) {
+            log::warn!("Session audio: resample failed: {e}");
+            return;
+        }
+        let samples = out.samples();
+        if samples == 0 {
+            return;
+        }
+        let data = out.data(0);
+        let bytes = (samples * 2).min(data.len());
+        if self.ring.is_empty() {
+            self.ring_pts_f64 = pts_us as f64;
+        }
+        self.ring.extend(&data[..bytes]);
+    }
 }
 
 unsafe impl Send for SessionInner {}
@@ -221,7 +329,7 @@ impl LavSession {
             decoder_pix_fmt,
             decoder.width(),
             decoder.height(),
-            ffmpeg::format::Pixel::YUV420P,
+            ffmpeg::format::Pixel::BGR24,
             decoder.width(),
             decoder.height(),
             ffmpeg::software::scaling::Flags::BILINEAR,
@@ -229,6 +337,38 @@ impl LavSession {
 
         let sw_frame = ffmpeg::frame::Video::empty();
         let hw_frame = ffmpeg::frame::Video::empty();
+
+        // Best-effort audio: open the best audio stream's decoder. Audio
+        // packets are fed and resampled to mono S16 while reading video
+        // frames (the packet loop drains them as they are demuxed).
+        let mut audio_state: Option<AudioState> = None;
+        if let Some(astream) = ictx.streams().best(ffmpeg::media::Type::Audio) {
+            let aidx = astream.index();
+            let atb = astream.time_base();
+            let aparams = astream.parameters();
+            match ffmpeg::codec::context::Context::from_parameters(aparams)
+                .and_then(|ctx| ctx.decoder().audio())
+            {
+                Ok(aud_decoder) => {
+                    log::info!(
+                        "Session {}: audio stream {} decoded to mono S16",
+                        id, aidx
+                    );
+                    audio_state = Some(AudioState {
+                        decoder: aud_decoder,
+                        stream_index: aidx,
+                        time_base: atb,
+                        resampler: None,
+                        ring: VecDeque::new(),
+                        ring_pts_f64: 0.0,
+                        out_rate: 0,
+                    });
+                }
+                Err(e) => {
+                    log::info!("Session {}: no usable audio decoder ({e}), video only", id);
+                }
+            }
+        }
 
         Ok(Self {
             id,
@@ -241,6 +381,7 @@ impl LavSession {
                 video_stream_index: Some(video_stream_index),
                 decoder: Some(decoder),
                 scaler: Some(scaler),
+                scaler_src: None,
                 sw_frame,
                 hw_frame,
                 frame_count: 0,
@@ -249,6 +390,7 @@ impl LavSession {
                 hw_backend,
                 hw_device_ctx: hw_device,
                 hw_pix_fmt,
+                audio: audio_state,
             }),
         })
     }
@@ -265,6 +407,7 @@ impl LavSession {
             .stream(video_idx).unwrap().time_base();
 
         let hw_active = inner.hw_pix_fmt.is_some();
+        let audio_idx = inner.audio.as_ref().map(|a| a.stream_index);
 
         loop {
             if self.interrupted.load(Ordering::Relaxed) {
@@ -279,10 +422,16 @@ impl LavSession {
                     Ok(()) => {}
                     Err(ffmpeg::Error::Eof) => {
                         inner.eof = true;
+                        // Decode any audio frames still buffered so the tail
+                        // of the soundtrack can be drained by Java.
+                        if let Some(audio) = inner.audio.as_mut() {
+                            audio.drain_at_eof();
+                        }
                         return Err(anyhow::anyhow!("end of stream"));
                     }
                     Err(ffmpeg::Error::InvalidData) => continue,
                     Err(e) => {
+                        eprintln!("[lav] packet.read failed: {e:?} ({e})");
                         *self.error.lock().unwrap() = e.to_string();
                         return Err(e.into());
                     }
@@ -290,6 +439,11 @@ impl LavSession {
             }
 
             if packet.stream() != video_idx {
+                if Some(packet.stream()) == audio_idx {
+                    if let Some(audio) = inner.audio.as_mut() {
+                        audio.feed(&packet);
+                    }
+                }
                 continue;
             }
 
@@ -317,7 +471,10 @@ impl LavSession {
                 let mut hw_frame = ffmpeg::frame::Video::empty();
                 std::mem::swap(&mut hw_frame, &mut inner.hw_frame);
                 let decoder = inner.decoder.as_mut().context("no decoder")?;
-                decoder.send_packet(&packet)?;
+                if let Err(e) = decoder.send_packet(&packet) {
+                    eprintln!("[lav] hw send_packet failed: {e:?} ({e})");
+                    return Err(e.into());
+                }
 
                 match decoder.receive_frame(&mut hw_frame) {
                     Ok(()) => {
@@ -337,6 +494,10 @@ impl LavSession {
                                 *self.error.lock().unwrap() = err.clone();
                                 return Err(anyhow::anyhow!(err));
                             }
+                            // Hardware transfer does not carry timestamps over;
+                            // keep the decoded frame's pts for playback pacing.
+                            let hw_pts = hw_frame.pts().or_else(|| sw_frame.pts());
+                            sw_frame.set_pts(hw_pts);
                         }
                         std::mem::swap(&mut hw_frame, &mut inner.hw_frame);
                         std::mem::swap(&mut sw_frame, &mut inner.sw_frame);
@@ -356,7 +517,10 @@ impl LavSession {
                 let mut sw_frame = ffmpeg::frame::Video::empty();
                 std::mem::swap(&mut sw_frame, &mut inner.sw_frame);
                 let decoder = inner.decoder.as_mut().context("no decoder")?;
-                decoder.send_packet(&packet)?;
+                if let Err(e) = decoder.send_packet(&packet) {
+                    eprintln!("[lav] sw send_packet failed: {e:?} ({e})");
+                    return Err(e.into());
+                }
 
                 match decoder.receive_frame(&mut sw_frame) {
                     Ok(()) => {
@@ -374,13 +538,61 @@ impl LavSession {
                 }
             }
 
-            // Scale frame (converts whatever the decoder output to I420)
+            // Scale frame: convert the decoder output (NV12 from hardware
+            // transfer, YUV420P from software decode) to packed BGR using
+            // swscale — the same conversion ffmpeg's own tooling and the
+            // JavaCV path use, so colors match exactly.
             let mut output_frame = ffmpeg::frame::Video::empty();
             {
                 let mut sw_frame = ffmpeg::frame::Video::empty();
                 std::mem::swap(&mut sw_frame, &mut inner.sw_frame);
+
+                let in_fmt = sw_frame.format();
+                let in_w = sw_frame.width();
+                let in_h = sw_frame.height();
+                let needs_new = in_w > 0 && in_h > 0
+                    && match inner.scaler_src {
+                        Some((f, w, h)) => f != in_fmt || w != in_w || h != in_h,
+                        None => true,
+                    };
+
+                if needs_new || inner.scaler.is_none() {
+                    let ctx = ffmpeg::software::scaling::Context::get(
+                        in_fmt,
+                        in_w,
+                        in_h,
+                        ffmpeg::format::Pixel::BGR24,
+                        in_w,
+                        in_h,
+                        ffmpeg::software::scaling::Flags::BILINEAR,
+                    )
+                    .context("failed to create scaler")?;
+                    inner.scaler = Some(ctx);
+                    inner.scaler_src = Some((in_fmt, in_w, in_h));
+                    log::info!(
+                        "Session {}: scaler reconfigured for {:?} {}x{}",
+                        self.id,
+                        in_fmt,
+                        in_w,
+                        in_h
+                    );
+                }
+
+                if in_w == 0 || in_h == 0 {
+                    // Nothing usable in this frame; skip it.
+                    std::mem::swap(&mut sw_frame, &mut inner.sw_frame);
+                    continue;
+                }
+
                 let scaler = inner.scaler.as_mut().context("no scaler")?;
-                scaler.run(&sw_frame, &mut output_frame)?;
+                if let Err(e) = scaler.run(&sw_frame, &mut output_frame) {
+                    *self.error.lock().unwrap() = e.to_string();
+                    log::warn!("Session {}: scaler.run failed: {:?}", self.id, e);
+                    std::mem::swap(&mut sw_frame, &mut inner.sw_frame);
+                    return Err(e.into());
+                }
+                // sws only converts pixels; carry the pts into the output frame.
+                output_frame.set_pts(sw_frame.pts());
                 std::mem::swap(&mut sw_frame, &mut inner.sw_frame);
             }
 
@@ -391,60 +603,57 @@ impl LavSession {
             inner.last_pts_us = pts_us;
             inner.frame_count += 1;
 
-            let y_size = (width * height) as usize;
-            let uv_size = ((width + 1) / 2 * (height + 1) / 2) as usize;
-            let total = y_size + uv_size * 2;
+            // Packed BGR output: one row of width*3 bytes (stride-aware).
+            let row_bytes = (width * 3) as usize;
+            let total = row_bytes * height as usize;
 
             if total > buf_len {
                 return Err(anyhow::anyhow!("buffer too small: need {} have {}", total, buf_len));
             }
 
             let mut offset = 0;
-
-            // Y plane
-            let y_data = output_frame.data(0);
-            let y_stride = output_frame.stride(0);
+            let data = output_frame.data(0);
+            let stride = output_frame.stride(0);
             for row in 0..height as usize {
-                let src_start = row * y_stride;
-                let src_end = src_start + width as usize;
-                if src_end <= y_data.len() {
+                let src_start = row * stride;
+                let src_end = src_start + row_bytes;
+                if src_end <= data.len() {
                     unsafe {
-                        std::ptr::copy_nonoverlapping(y_data[src_start..src_end].as_ptr(), buf.add(offset), width as usize);
+                        std::ptr::copy_nonoverlapping(data[src_start..src_end].as_ptr(), buf.add(offset), row_bytes);
                     }
                 }
-                offset += width as usize;
-            }
-
-            // U plane
-            let u_data = output_frame.data(1);
-            let u_stride = output_frame.stride(1);
-            for row in 0..(height / 2) as usize {
-                let src_start = row * u_stride;
-                let src_end = src_start + (width / 2) as usize;
-                if src_end <= u_data.len() {
-                    unsafe {
-                        std::ptr::copy_nonoverlapping(u_data[src_start..src_end].as_ptr(), buf.add(offset), (width / 2) as usize);
-                    }
-                }
-                offset += (width / 2) as usize;
-            }
-
-            // V plane
-            let v_data = output_frame.data(2);
-            let v_stride = output_frame.stride(2);
-            for row in 0..(height / 2) as usize {
-                let src_start = row * v_stride;
-                let src_end = src_start + (width / 2) as usize;
-                if src_end <= v_data.len() {
-                    unsafe {
-                        std::ptr::copy_nonoverlapping(v_data[src_start..src_end].as_ptr(), buf.add(offset), (width / 2) as usize);
-                    }
-                }
-                offset += (width / 2) as usize;
+                offset += row_bytes;
             }
 
             return Ok(DecodedFrame { width, height, pts_us, data_len: total });
         }
+    }
+
+    /// Drain up to `buf_len` bytes of interleaved S16 mono PCM into `buf`.
+    /// Returns (bytes_written, pts_us_of_first_sample, sample_rate); a zero
+    /// length means no audio is pending right now (or the stream has none).
+    pub fn read_audio_pcm(&self, buf: *mut u8, buf_len: usize) -> Result<(usize, i64, i32)> {
+        let mut inner = self.inner.lock().unwrap();
+        let audio = match inner.audio.as_mut() {
+            Some(a) => a,
+            None => return Ok((0, 0, 0)),
+        };
+        if audio.ring.is_empty() || buf_len < 2 {
+            return Ok((0, 0, audio.out_rate));
+        }
+        // Whole S16 samples only.
+        let n = audio.ring.len().min(buf_len) & !1usize;
+        if n == 0 {
+            return Ok((0, 0, audio.out_rate));
+        }
+        let pts_us = audio.ring_pts_f64.round() as i64;
+        let rate = audio.out_rate.max(1);
+        let chunk: Vec<u8> = audio.ring.drain(..n).collect();
+        unsafe {
+            ptr::copy_nonoverlapping(chunk.as_ptr(), buf, n);
+        }
+        audio.ring_pts_f64 += (n / 2) as f64 * 1_000_000.0 / rate as f64;
+        Ok((n, pts_us, audio.out_rate))
     }
 
     pub fn seek(&self, position_us: i64) -> Result<()> {
@@ -457,6 +666,9 @@ impl LavSession {
         ictx.seek(timestamp, timestamp..)?;
         if let Some(ref mut decoder) = inner.decoder {
             decoder.flush();
+        }
+        if let Some(audio) = inner.audio.as_mut() {
+            audio.on_seek();
         }
         inner.eof = false;
         Ok(())

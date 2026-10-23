@@ -67,6 +67,19 @@ public class DisplayTexture extends AbstractTexture {
         return this.width > 0 && this.height > 0 && this.format > 0;
     }
 
+    /**
+     * Record the size and format of pixels that were uploaded directly through
+     * raw GL (the native decoder path bypasses {@link #uploadRaw}), so that
+     * {@link #isReady()} becomes true and the renderer draws the layer quad.
+     * Must be called on the render thread with the size actually uploaded.
+     */
+    public void markReady(int width, int height, int format) {
+        RenderSystem.assertOnRenderThread();
+        this.width = width;
+        this.height = height;
+        this.format = format;
+    }
+
     public void setLinearFilter() {
         RenderSystem.assertOnRenderThread();
         GlStateManager._bindTexture(this.getGlId());

@@ -336,6 +336,7 @@ public class DisplayBlock extends BlockWithEntity {
                         } else {
                             sb.append("§aOK§r");
                         }
+                        sb.append(video.isUsingNative() ? " §7path:native§r" : " §7path:javacv§r");
                         sb.append(" §7Failed grabs:§r ").append(video.getFailedGrabs()).append("/5")
                           .append(" §7Restarts:§r ").append(video.getRestartAttempts()).append("/3")
                           .append(" §7Perm failed:§r ").append(video.isPermanentlyFailed());

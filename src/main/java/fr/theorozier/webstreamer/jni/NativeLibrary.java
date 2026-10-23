@@ -129,6 +129,14 @@ public final class NativeLibrary {
      */
     public static native long nReadFrameI420(long handle, ByteBuffer buf, int bufLen, int[] outDims, long[] outPts);
 
+    /**
+     * Drain one chunk of native-decoded mono S16 PCM into the provided direct
+     * ByteBuffer. Available since ABI v7; callers should degrade gracefully
+     * (catch Throwable) when running against an older native library.
+     * @return The number of bytes written (0 when none pending), or -1 on error.
+     */
+    public static native long nReadAudioPcm(long handle, ByteBuffer buf, int bufLen, long[] outInfo);
+
     static native int nSeek(long handle, long positionUs);
     static native int nEnableCache(long handle, long maxDurationUs, long maxBytes);
     static native int nError(long handle, byte[] buf, int bufLen);
