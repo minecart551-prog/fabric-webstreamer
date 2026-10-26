@@ -5,11 +5,13 @@ import fr.theorozier.webstreamer.display.DisplayNetworking;
 import fr.theorozier.webstreamer.display.render.DisplayBlockEntityRenderer;
 import fr.theorozier.webstreamer.display.render.DisplayLayerManager;
 import fr.theorozier.webstreamer.jni.NativeLibrary;
+import fr.theorozier.webstreamer.util.FFmpegLibrary;
 import fr.theorozier.webstreamer.util.WebStreamerNativesManager;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.fabricmc.fabric.api.blockrenderlayer.v1.BlockRenderLayerMap;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.render.block.entity.BlockEntityRendererFactories;
@@ -76,6 +78,34 @@ public class WebStreamerClientMod implements ClientModInitializer {
                 "WebStreamer-natives-warmup");
         nativesWarmup.setDaemon(true);
         nativesWarmup.start();
+
+        // Second launch-time step: preload the native DLLs and link the FFmpeg
+        // classes, so joining a server no longer pays that one-time cost either
+        // (on Windows that's ~40 DLL loads + JavaCPP class init, up to a couple
+        // of seconds). Runs at CLIENT_STARTED — the head of MinecraftClient.run(),
+        // i.e. AFTER the constructor created the GLFW window and GL context.
+        // It must NOT run in onInitializeClient() like the download: loading
+        // FFmpeg natives before the window exists interferes with GLX/GLFW
+        // window creation on some GPUs (see FFmpegLibrary's class javadoc).
+        // Background thread + FFmpegLibrary's INIT_LOCK keep it single-flight:
+        // any later initializeFrameGrabber() from layer creation just blocks
+        // until this finishes, then sees the linked result. If the download
+        // failed (offline at launch), the link attempt is skipped so
+        // FFmpegLibrary's sticky failure flag isn't set — the first video after
+        // joining then retries everything exactly as before.
+        ClientLifecycleEvents.CLIENT_STARTED.register(client -> {
+            Thread ffmpegWarmup = new Thread(() -> {
+                try {
+                    nativesWarmup.join(); // wait for the download attempt to settle
+                } catch (InterruptedException ignored) { }
+                if (!WebStreamerNativesManager.nativesPresent()) {
+                    return;
+                }
+                FFmpegLibrary.initializeFrameGrabber();
+            }, "WebStreamer-ffmpeg-warmup");
+            ffmpegWarmup.setDaemon(true);
+            ffmpegWarmup.start();
+        });
 
         // BlockEntityRendererRegistry.register(WebStreamerMod.DISPLAY_BLOCK_ENTITY, DisplayBlockEntityRenderer::new);
         BlockEntityRendererFactories.register(WebStreamerMod.DISPLAY_BLOCK_ENTITY, DisplayBlockEntityRenderer::new);

@@ -240,6 +240,29 @@ public final class WebStreamerNativesManager {
     }
 
     /**
+     * Whether native library files actually exist on disk right now (either
+     * layout). Used to decide whether it is safe to link the FFmpeg classes
+     * early: linking without files present throws in a class static
+     * initializer, which is sticky for the whole JVM session (see
+     * {@code FFmpegLibrary}), so a failed launch-time download must skip the
+     * link attempt and let the first real consumer retry as before.
+     *
+     * @return true if native library files are present in the natives directory
+     */
+    public static boolean nativesPresent() {
+        Path nativesDir = getNativesDir();
+        if (hasNativeFiles(nativesDir)) {
+            return true;
+        }
+        try {
+            String platform = Loader.getPlatform();
+            return hasNativeFiles(nativesDir.resolve("org/bytedeco/ffmpeg").resolve(platform));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
      * Pre-load all native libraries from the natives directory via
      * {@link System#load(String)} using absolute paths. Uses multiple
      * retry rounds so DLLs are naturally loaded in dependency order.
