@@ -3,6 +3,7 @@ package fr.theorozier.webstreamer.display.render;
 import com.mojang.blaze3d.systems.RenderSystem;
 import fr.theorozier.webstreamer.WebStreamerMod;
 import fr.theorozier.webstreamer.display.DisplayBlockEntity;
+import fr.theorozier.webstreamer.jni.NativeLibrary;
 import fr.theorozier.webstreamer.util.FFmpegLibrary;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
@@ -170,7 +171,14 @@ public class DisplayLayerManager extends DisplayLayerMap<DisplayLayerNode.Key> {
         // DisplayLayerVideo which feeds the URL straight into FrameGrabber.
         String scheme = key.uri().getScheme();
         if ("http".equals(scheme) || "https".equals(scheme)) {
-            if (!FFmpegLibrary.initializeFrameGrabber()) {
+            // Always link the JavaCV classes on the render thread when possible
+            // (best effort — JavaCV is the native path's fallback), but only
+            // block layer creation when NEITHER backend can work: the bundled
+            // native decoder must stay reachable on systems where JavaCPP
+            // natives fail to load (e.g. Linux GPU/GLX static-init failures,
+            // which stick for the whole JVM session).
+            boolean javacvReady = FFmpegLibrary.initializeFrameGrabber();
+            if (!javacvReady && !NativeLibrary.isAvailable()) {
                 throw new OutOfLayerException();
             }
             return new DisplayLayerVideo(key, this.res);

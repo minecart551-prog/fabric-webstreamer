@@ -32,6 +32,15 @@ public class NativeFrameGrabber {
     private int lastHeight = 0;
     private long lastPtsUs = 0;
 
+    /**
+     * Set when the native session reported a clean end-of-stream (the decoder
+     * hit EOF), as opposed to a transient IO/error return. Lets the decode loop
+     * distinguish "video ended, advance the playlist" from "grab failed".
+     */
+    private volatile boolean endOfStream = false;
+
+    public boolean isAtEndOfStream() { return endOfStream; }
+
     // Raw frame buffer from the native decoder (direct for JNI) — decode
     // worker thread only. The native side outputs packed BGR via swscale
     // (w*h*3 bytes), the same byte order as JavaCV frames.
@@ -183,7 +192,15 @@ public class NativeFrameGrabber {
             returnSlot(slot);
             return false;
         } catch (Throwable t) {
-            WebStreamerMod.LOGGER.debug("[Native] Read frame failed: {}", t.getMessage());
+            // The native side reports a clean EOF as an IOException whose
+            // message is "end of stream" (lav/src/lib.rs). Distinguish it from
+            // a real decode/IO error so the loop can advance the playlist.
+            String msg = t.getMessage();
+            if (msg != null && msg.contains("end of stream")) {
+                endOfStream = true;
+            } else {
+                WebStreamerMod.LOGGER.debug("[Native] Read frame failed: {}", msg);
+            }
             returnSlot(slot);
             return false;
         }
@@ -240,42 +257,7 @@ public class NativeFrameGrabber {
                 return false;
             }
 
-            ByteBuffer buf = rgbBuffers[slot];
-            int w = slotWidths[slot];
-            int h = slotHeights[slot];
-            boolean uploaded = false;
-
-            if (uploadVisible && buf != null && w > 0 && h > 0) {
-                buf.clear();
-                buf.limit(w * h * 3);
-                buf.position(0);
-
-                // Bind through GlStateManager so vanilla's bind-state cache stays
-                // in sync (a raw glBindTexture desyncs it and corrupts subsequent
-                // vanilla draws), and pin the unpack state: DisplayTexture.uploadRaw
-                // (image/JavaCV paths) leaves GL_UNPACK_ROW_LENGTH set to the last
-                // stride, which would make these tightly packed rows upload as
-                // garbage or fail with GL_INVALID_OPERATION.
-                GlStateManager._bindTexture(textureId);
-                GlStateManager._pixelStore(GL11.GL_UNPACK_ALIGNMENT, 1);
-                GlStateManager._pixelStore(GL11.GL_UNPACK_ROW_LENGTH, 0);
-                GlStateManager._pixelStore(GL11.GL_UNPACK_SKIP_ROWS, 0);
-                GlStateManager._pixelStore(GL11.GL_UNPACK_SKIP_PIXELS, 0);
-                // The native side outputs packed BGR (same byte order as JavaCV
-                // frames), matching DisplayTexture.uploadRaw's GL_BGR convention.
-                if (w == uploadedTexW && h == uploadedTexH) {
-                    GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, w, h,
-                            GL12.GL_BGR, GL11.GL_UNSIGNED_BYTE, buf);
-                } else {
-                    GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGB8, w, h, 0,
-                            GL12.GL_BGR, GL11.GL_UNSIGNED_BYTE, buf);
-                    uploadedTexW = w;
-                    uploadedTexH = h;
-                }
-
-                uploadedPtsUs = slotPtsUs[slot];
-                uploaded = true;
-            }
+            boolean uploaded = uploadVisible && uploadSlotLocked(textureId, slot);
 
             freeSlots.addLast(slot);
             handoffLock.notifyAll();
@@ -284,11 +266,103 @@ public class NativeFrameGrabber {
     }
 
     /**
+     * Consume every queued frame (due or not) and upload only the newest one —
+     * the end-of-video "show the final frame" behavior mirroring tickJavaCV's
+     * end block, which drains pendingVideoFrames keeping the last frame so the
+     * display ends on the video's true final frame before advancing/stopping.
+     * Called from the render thread only.
+     *
+     * @param textureId The OpenGL texture ID to upload to.
+     * @param uploadVisible Whether to actually upload to GL (false just
+     *                      consumes and drops the queued frames).
+     * @return true if a frame was uploaded.
+     */
+    public boolean uploadLastPending(int textureId, boolean uploadVisible) {
+        synchronized (handoffLock) {
+            int slot = -1;
+            Integer next;
+            while ((next = readySlots.pollFirst()) != null) {
+                if (slot >= 0) {
+                    freeSlots.addLast(slot);
+                }
+                slot = next;
+            }
+            if (slot < 0) {
+                return false;
+            }
+
+            boolean uploaded = uploadVisible && uploadSlotLocked(textureId, slot);
+
+            freeSlots.addLast(slot);
+            handoffLock.notifyAll();
+            return uploaded;
+        }
+    }
+
+    /**
+     * Upload one slot's frame to the texture. Caller must hold
+     * {@link #handoffLock}. Updates {@link #uploadedPtsUs} and the cached
+     * texture dimensions on success.
+     *
+     * @return true if the frame was uploaded to GL.
+     */
+    private boolean uploadSlotLocked(int textureId, int slot) {
+        ByteBuffer buf = rgbBuffers[slot];
+        int w = slotWidths[slot];
+        int h = slotHeights[slot];
+        if (buf == null || w <= 0 || h <= 0) {
+            return false;
+        }
+
+        buf.clear();
+        buf.limit(w * h * 3);
+        buf.position(0);
+
+        // Bind through GlStateManager so vanilla's bind-state cache stays
+        // in sync (a raw glBindTexture desyncs it and corrupts subsequent
+        // vanilla draws), and pin the unpack state: DisplayTexture.uploadRaw
+        // (image/JavaCV paths) leaves GL_UNPACK_ROW_LENGTH set to the last
+        // stride, which would make these tightly packed rows upload as
+        // garbage or fail with GL_INVALID_OPERATION.
+        GlStateManager._bindTexture(textureId);
+        GlStateManager._pixelStore(GL11.GL_UNPACK_ALIGNMENT, 1);
+        GlStateManager._pixelStore(GL11.GL_UNPACK_ROW_LENGTH, 0);
+        GlStateManager._pixelStore(GL11.GL_UNPACK_SKIP_ROWS, 0);
+        GlStateManager._pixelStore(GL11.GL_UNPACK_SKIP_PIXELS, 0);
+        // The native side outputs packed BGR (same byte order as JavaCV
+        // frames), matching DisplayTexture.uploadRaw's GL_BGR convention.
+        if (w == uploadedTexW && h == uploadedTexH) {
+            GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, w, h,
+                    GL12.GL_BGR, GL11.GL_UNSIGNED_BYTE, buf);
+        } else {
+            GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGB8, w, h, 0,
+                    GL12.GL_BGR, GL11.GL_UNSIGNED_BYTE, buf);
+            uploadedTexW = w;
+            uploadedTexH = h;
+        }
+
+        uploadedPtsUs = slotPtsUs[slot];
+        return true;
+    }
+
+    /**
      * PTS (microseconds) of the frame uploaded by the last successful
      * {@link #uploadPending(int, long, boolean)} call.
      */
     public long getUploadedPtsUs() {
         return uploadedPtsUs;
+    }
+
+    /**
+     * Whether any decoded frames are still queued for the render thread.
+     * Used at end of stream to wait for the decode-ahead tail to be consumed
+     * before the layer restarts (the clock runs up to queueDepth frames behind
+     * the decoder, so restarting without this wait cuts the video's ending).
+     */
+    public boolean hasPendingFrames() {
+        synchronized (handoffLock) {
+            return !readySlots.isEmpty();
+        }
     }
 
     /**

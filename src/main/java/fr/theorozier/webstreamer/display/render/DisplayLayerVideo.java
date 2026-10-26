@@ -55,6 +55,10 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     });
     /** Cooldown before an automatic restart attempt after a grabber failure. */
     private static final long RESTART_RETRY_INTERVAL_NS = 2L * 1_000_000_000L;
+    /** Max wait for the render thread to consume the decode-ahead tail at end
+     * of stream before forcing the restart (the layer can be paused/out of
+     * range there, in which case the tail is dropped like it always was). */
+    private static final long TAIL_DRAIN_TIMEOUT_NS = 10L * 1_000_000_000L;
     /** Bounded automatic restart attempts, so a transient failure while the
      * display is off-screen self-heals instead of staying silent until the
      * renderer rebuilds the layer (which only happens when someone looks back). */
@@ -67,6 +71,11 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     // Native decode path
     private volatile NativeFrameGrabber nativeGrabber;
     private volatile boolean useNative = false;
+    /** Set by the decode thread when a loop restart swaps native sessions;
+     * consumed by the render thread, which must reset the audio source (same
+     * thing playlist advance does) so the old playthrough's timeline and any
+     * remaining tail buffers can't bleed into the new one. */
+    private volatile boolean audioRestartPending = false;
 
     // JavaCV decode path
     private FFmpegFrameGrabber grabber;
@@ -365,8 +374,12 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
      * Background decode loop for the native path: reads frames (blocking
      * network + decode), converts I420 to BGR off-thread, and publishes them
      * for the render thread to upload. Runs ahead of playback up to the
-     * grabber's decode-ahead queue depth (the queue is the backpressure), and
-     * pauses while the layer is not visible (matching visible-upload-only).
+     * grabber's decode-ahead queue depth (the queue is the backpressure).
+     * Visibility never gates decoding here: audio is decoded in this same
+     * loop, so pausing it on look-away would starve the audio sink and cause
+     * choppy stop/restart cycles. Only the GL upload is skipped for
+     * off-screen displays (via tickNative's uploadVisible), matching the
+     * JavaCV path and isVisibleUploadOnly's documented semantics.
      */
     private void nativeDecodeLoop() {
         // decodeToPending() returns false only on abnormal conditions (IO/JNI
@@ -383,16 +396,43 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                     break;
                 }
 
-                if (WebStreamerConfig.isVisibleUploadOnly() && !this.isVisible()) {
-                    Thread.sleep(50);
-                    continue;
-                }
-
                 // Collect audio decoded alongside the video packets (the
                 // native backend interleaves audio into the same read loop).
                 drainNativeAudio();
 
                 if (!ng.decodeToPending()) {
+                    if (ng.isAtEndOfStream()) {
+                        // Clean end of stream: mirror backgroundDecodeLoop()'s
+                        // structure — a playlist source sets decodeFinished so
+                        // the render thread (tickNative) advances it; a single
+                        // video loops by reopening the same URI, exactly like
+                        // the JavaCV path's loopVideo().
+                        boolean playlistSource = this.display != null && (
+                                (this.display.getSource() instanceof YoutubeDisplaySource yt && yt.hasPlaylist()) ||
+                                (this.display.getSource() instanceof ServerDisplaySource srv && srv.hasPlaylist()));
+                        if (playlistSource) {
+                            // Wait for the render thread to consume the
+                            // decode-ahead tail first: at EOS the clock runs up
+                            // to queueDepth frames behind the decoder, so
+                            // restarting immediately would cut the video's
+                            // ending (the audio tail meanwhile plays to the
+                            // true end from OpenAL's queue).
+                            if (!this.drainNativeTail(ng)) {
+                                break; // stopped/destroyed while waiting
+                            }
+                            this.decodeFinished = true;
+                            break;
+                        }
+                        if (!this.loopNativeVideo()) {
+                            if (this.grabberReady && !this.destroyed && !this.decodeFinished) {
+                                WebStreamerMod.LOGGER.error(makeLog("Native video loop failed to reopen."));
+                                this.grabberFailed = true;
+                            }
+                            break;
+                        }
+                        consecutiveFailures = 0;
+                        continue;
+                    }
                     if (++consecutiveFailures >= MAX_FAILED_GRABS) {
                         if (this.grabberReady && !this.destroyed && !this.decodeFinished) {
                             WebStreamerMod.LOGGER.error(makeLog(
@@ -433,6 +473,20 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     private void tickNative() {
         long now = System.nanoTime();
 
+        // A loop restart swaps native sessions on the decode thread; the audio
+        // source must be reset HERE on the render thread (exactly what playlist
+        // advance's audioSource.stop() does) so the old playthrough's timeline
+        // and any remaining tail buffers can't bleed into the new one — otherwise
+        // the new audio queues behind the old tail while the video already
+        // restarted, leaving the audio permanently behind. Runs before pause
+        // handling and before the audio-master yank: until the source is
+        // stopped it still reports the previous playthrough's (wrap-spanning)
+        // timestamp, which would otherwise yank the freshly reset 0-based clock.
+        if (this.audioRestartPending) {
+            this.audioRestartPending = false;
+            this.audioSource.stop();
+        }
+
         boolean shouldPause = this.externalPaused;
         if (this.lastTickNanos > 0 && !shouldPause) {
             this.playbackMicros += (now - this.lastTickNanos) / 1000L;
@@ -460,7 +514,11 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         // Audio-master sync (mirrors tickJavaCV): the audio sink plays its
         // queued PCM continuously, so its clock is the most stable timeline —
         // when it runs ahead of the video clock, yank the video clock forward.
-        if (this.audioSource != null && this.audioSource.isPlaying() && this.refTimestamp >= 0 && !shouldPause) {
+        // Gated on !audioRestartPending: right after a loop swap the dying
+        // source still reports the previous playthrough's wrap-spanning
+        // timestamp, which would yank the freshly reset clock back to D.
+        if (this.audioSource != null && this.audioSource.isPlaying() && this.refTimestamp >= 0 && !shouldPause
+                && !this.audioRestartPending) {
             long audioTs = this.audioSource.getEstimatedPlaybackTimestamp();
             if (audioTs > 0) {
                 long audioRelative = audioTs - this.refTimestamp;
@@ -497,8 +555,11 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         }
 
         // Queue pending audio chunks and keep audio playback running, same as
-        // the JavaCV path (the native decode loop feeds the same queue).
-        if (this.tempAudioByteBuf != null && this.tempAudioBuffer != null) {
+        // the JavaCV path (the native decode loop feeds the same queue). Skip
+        // while a loop restart is pending: chunks that land on the dying source
+        // would be discarded with its queue by stop(), so let them wait one tick
+        // and get queued onto the fresh, reset source instead.
+        if (!this.audioRestartPending && this.tempAudioByteBuf != null && this.tempAudioBuffer != null) {
             int audioBuffersQueued = 0;
             try {
                 ShortBuffer audioDataShort = this.tempAudioByteBuf.asShortBuffer();
@@ -521,6 +582,59 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             if (audioBuffersQueued > 0) {
                 this.audioSource.playFrom(this.refTimestamp + this.playbackMicros);
             }
+        }
+
+        // End of video (native path): mirror the JavaCV handling — drain any
+        // audio still buffered, then advance the playlist or stop cleanly.
+        if (this.decodeFinished) {
+            try {
+                RawAudioChunk chunk;
+                while ((chunk = this.pendingAudioChunks.poll()) != null) {
+                    ShortBuffer audioDataShort = this.tempAudioByteBuf.asShortBuffer();
+                    audioDataShort.clear();
+                    audioDataShort.put(chunk.pcm);
+                    audioDataShort.flip();
+                    AudioStreamingBuffer audioBuf = AudioStreamingBuffer.fromRawData(
+                            this.tempAudioBuffer, audioDataShort,
+                            1, chunk.sampleRate, chunk.timestamp);
+                    if (audioBuf != null) {
+                        this.audioSource.queueBuffer(audioBuf);
+                    }
+                }
+                this.audioSource.playFrom(this.refTimestamp + this.playbackMicros);
+            } catch (Exception e) {
+                WebStreamerConfig.debugLog(makeLog("Native audio drain failed at end of stream: {}"), e.getMessage());
+            }
+
+            // Show the video's true final frame before advancing/stopping
+            // (mirrors tickJavaCV's end block): the decode-ahead queue may
+            // still hold frames the clock hasn't reached, and they would
+            // otherwise be discarded unread on restart/stop.
+            boolean endUploadVisible = !WebStreamerConfig.isVisibleUploadOnly() || this.isVisible();
+            if (ng.uploadLastPending(this.tex.getGlId(), endUploadVisible)) {
+                this.tex.markReady(ng.getUploadedWidth(), ng.getUploadedHeight(), GL11.GL_RGB8);
+                if (!this.linearFilterApplied) {
+                    this.linearFilterApplied = true;
+                    this.tex.setLinearFilter();
+                }
+            }
+
+            int restartResult = this.tryRestartNextVideo();
+            if (restartResult == RESTART_RESTARTED) {
+                if (this.display != null) {
+                    if (this.display.getSource() instanceof YoutubeDisplaySource ytSource && ytSource.hasPlaylist()) {
+                        ytSource.prepareNextVideo();
+                    } else if (this.display.getSource() instanceof ServerDisplaySource srvSource && srvSource.hasPlaylist()) {
+                        srvSource.prepareNextVideo();
+                    }
+                }
+                return;
+            } else if (restartResult == RESTART_WAITING) {
+                return;
+            }
+            WebStreamerMod.LOGGER.info(makeLog("Reached end of video (native)."));
+            this.stopGrabber();
+            this.audioSource.stop();
         }
     }
 
@@ -930,6 +1044,143 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 this.grabberFailed = true;
             }
         }
+    }
+
+    /**
+     * Restart the current video from the beginning when a single (non-playlist)
+     * video reaches its end, mirroring {@link #loopVideo()} for the native path.
+     * Runs on the native decode thread (the blocking reopen is fine there, just
+     * like loopVideo()'s startUnsafe() on the JavaCV decode thread).
+     *
+     * <p>The blocking reopen happens FIRST so it overlaps with the render
+     * thread consuming the current playthrough's decode-ahead tail — that tail
+     * contains the video's ending, and the audio tail is playing to the true
+     * end from OpenAL meanwhile. Only after the drain does this swap sessions
+     * and reset the clock, so no ending is ever cut and both timelines
+     * restart together.</p>
+     *
+     * <p>The transition replicates what a normal start and a playlist advance
+     * both do, because those are proven in sync: {@code refTimestamp = 0}
+     * leaves the audio-master sync block active, the static timestamp tracker
+     * in {@link AudioStreamingBuffer} is reset (as {@code startNativeGrabber}
+     * does), and {@link #audioRestartPending} makes the render thread call
+     * {@code audioSource.stop()} on the next tick — same as
+     * {@code tryRestartNextVideo()} does. Before this, the loop kept the old
+     * source playing through the wrap: the not-yet-played tail sat in OpenAL
+     * ahead of the new playthrough's first buffers while the video had already
+     * restarted at 0, and with sync disabled by {@code ref = -1} nothing ever
+     * pulled them back together — the audio lagged the video by the leftover
+     * tail plus restart latency, forever. Stopping the source on the render
+     * thread (never here — the render thread is concurrently queueing to it)
+     * cuts that tail at the seam, and the first {@code playFrom} after the
+     * restart rebases the new buffers onto the reset clock exactly like a
+     * normal start, so both timelines restart together again. The tracker
+     * reset is safe from this thread: {@code pendingAudioChunks} was just
+     * cleared and the fresh session doesn't produce a chunk until this method
+     * returns, so no in-flight timestamp can be re-bridged.</p>
+     *
+     * @return true if the native grabber was reopened on the same URI
+     */
+    private boolean loopNativeVideo() {
+        WebStreamerMod.LOGGER.debug(makeLog("Video loop restart (native)"));
+
+        // 1. Open the next playthrough (blocking network open) while the
+        //    render thread keeps consuming the current video's tail.
+        NativeFrameGrabber fresh = new NativeFrameGrabber();
+        if (!fresh.open(this.currentUri)) {
+            try {
+                fresh.close();
+            } catch (Throwable ignored) { }
+            return false;
+        }
+
+        // 2. Wait for the tail to be consumed (audio ring drained along the way).
+        NativeFrameGrabber old = this.nativeGrabber;
+        if (old == null || !this.drainNativeTail(old)) {
+            try {
+                fresh.close();
+            } catch (Throwable ignored) { }
+            return false;
+        }
+
+        // 3. The reopen + drain blocked; bail out if the layer was stopped
+        //    meanwhile (stopGrabber nulls nativeGrabber / clears grabberReady).
+        if (this.destroyed || this.decodeFinished || !this.grabberReady || !this.useNative) {
+            try {
+                fresh.close();
+            } catch (Throwable ignored) { }
+            return false;
+        }
+
+        // 4. Swap in the fresh session and reset the playback clock together —
+        //    after the drain there is no queued tail left, so the 0-based clock
+        //    and the 0-based new frames line up with no race.
+        fresh.enableCache(30_000_000L, 32 * 1024 * 1024);
+        this.playbackMicros = 0;
+        // Sync stays ENABLED (ref = 0, like a fresh start / playlist advance):
+        // the pending audio stop below gives the new playthrough a clean
+        // 0-based audio timeline rebased onto this clock, so the yank can never
+        // see the previous playthrough's wrap-spanning timestamp (it's also
+        // gated on !audioRestartPending until the stop happens).
+        this.refTimestamp = 0;
+        this.pausedPlaybackMicros = 0;
+        this.lastTickNanos = System.nanoTime();
+        this.lastDecodedAudioTs = 0;
+        this.pendingAudioChunks.clear();
+        AudioStreamingBuffer.resetTimestampTracker();
+        // The render thread must stop the audio source (old tail cut at the
+        // seam, queue/offset bookkeeping reset) before it queues anything from
+        // this new session — flag it; tickNative consumes it before the pause
+        // logic, the yank, and the chunk drain.
+        this.audioRestartPending = true;
+        this.nativeGrabber = fresh;
+
+        // Close the old grabber async (kill is immediate; close frees the lav
+        // session). Safe against a concurrent render-thread uploadPending: both
+        // synchronize on the old grabber's own handoff lock, and a cleared/
+        // closed handle just makes upload return false.
+        old.kill();
+        NATIVE_CLOSER.execute(() -> {
+            try {
+                old.close();
+            } catch (Throwable ignored) { }
+        });
+        return true;
+    }
+
+    /**
+     * Wait for the render thread to consume the decode-ahead tail left when the
+     * native decoder reaches end of stream. At EOS the playback clock runs up
+     * to queueDepth frames behind the decoder (decode-ahead is by design), so
+     * restarting immediately would silently discard the video's ending while
+     * OpenAL kept playing the matching audio tail — the loop/advance would cut
+     * the ending short. Keeps draining the native audio ring while waiting so
+     * the last PCM still reaches OpenAL. Called from the decode thread.
+     *
+     * @param ng the grabber whose queued frames should be consumed
+     * @return false if the layer was stopped/destroyed while waiting (the
+     *         caller should abandon the restart); true when fully drained or
+     *         when the wait timed out (paused/off-screen layer — the restart
+     *         then falls back to the old immediate behavior)
+     */
+    private boolean drainNativeTail(NativeFrameGrabber ng) {
+        long deadline = System.nanoTime() + TAIL_DRAIN_TIMEOUT_NS;
+        while (ng.hasPendingFrames()
+                && !this.destroyed && !this.decodeFinished
+                && this.grabberReady && this.useNative) {
+            drainNativeAudio();
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+            if (System.nanoTime() - deadline >= 0) {
+                WebStreamerConfig.debugLog(makeLog("Timed out draining video tail before restart."));
+                break;
+            }
+        }
+        return !this.destroyed && !this.decodeFinished && this.grabberReady && this.useNative;
     }
 
     // -------------------------------------------------------------------------

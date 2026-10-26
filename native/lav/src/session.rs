@@ -244,7 +244,20 @@ impl LavSession {
         let interrupted = Arc::new(AtomicBool::new(false));
         let hw_backend = HwBackend::detect();
 
-        let ictx = ffmpeg::format::input(&url)
+        // Same HTTP identity as the JavaCV path (FFmpegFrameGrabber's
+        // user_agent + Referer options): some CDNs vary behavior by user
+        // agent or require the YouTube referer, and the two decode paths
+        // should look identical to the server. Unknown options (non-http
+        // inputs like plain files) are ignored by avformat_open_input.
+        let mut open_opts = ffmpeg::Dictionary::new();
+        open_opts.set(
+            "user_agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        );
+        open_opts.set("headers", "Referer: https://www.youtube.com/\r\n");
+
+        let ictx = ffmpeg::format::input_with_dictionary(&url, open_opts)
             .context("failed to open input")?;
 
         let video_stream_index = ictx

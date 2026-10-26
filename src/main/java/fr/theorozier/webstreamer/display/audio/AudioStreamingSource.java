@@ -166,6 +166,15 @@ public class AudioStreamingSource {
 			return; // Not initialized, nothing to pause
 		}
 		this.checkValid();
+		// Freeze the estimated clock at the actual pause position. Without
+		// this, getEstimatedPlaybackTimestamp() keeps returning the position
+		// of the last *start* while paused (potentially minutes stale), and
+		// the resume path relies on this value to restart the clock from the
+		// right content position.
+		if (this.playTimestamp != 0 && alGetSourcei(this.sourceId, AL_SOURCE_STATE) == AL_PLAYING) {
+			this.playBufferTimestamp += (System.nanoTime() - this.playTimestamp) / 1000L;
+			this.playTimestamp = 0;
+		}
 		alSourcePause(this.sourceId);
 	}
 
@@ -269,15 +278,28 @@ public class AudioStreamingSource {
 		
 		if (this.queue.isEmpty()) {
 			WebStreamerMod.LOGGER.debug("[{}] Audio source has no queued buffers at timestamp={} (playing={})", this.name, timestamp, playing);
-			// If no buffer is queued, just don't play.
+			// If no buffer is queued, don't start — except when resuming a
+			// paused source whose buffers are all still attached to the AL
+			// side: alSourcePlay() continues them from the frozen pause
+			// position. Without this, coming back into range would leave the
+			// source paused (silent) until the next chunk happened to arrive.
+			if (!playing && state == AL_PAUSED && queued > 0) {
+				alSourcePlay(this.sourceId);
+				this.playTimestamp = System.nanoTime();
+				WebStreamerMod.LOGGER.debug("[{}] Resumed paused source at frozen position {}", this.name, this.playBufferTimestamp);
+			}
 			return;
 		}
 		
 		AudioStreamingBuffer firstBuffer = this.queue.peekFirst();
 		
-		if (!playing && firstBuffer.timestamp > timestamp) {
+		if (!playing && state != AL_PAUSED && firstBuffer.timestamp > timestamp) {
 			WebStreamerMod.LOGGER.debug("[{}] Audio source waiting for first buffer timestamp={} currentTimestamp={} queueSize={} state={}", this.name, firstBuffer.timestamp, timestamp, this.queue.size(), getStateName(state));
-			// If we are not playing, we should only start playing when the first buffer is reached.
+			// If we are not playing (fresh/stopped start), we should only start
+			// playing when the first buffer is reached. A paused source is
+			// different: its already-queued AL buffers resume from the frozen
+			// pause position, and the internal buffers are appended behind
+			// them, so waiting here would just add a silence gap on resume.
 			return;
 		}
 		
@@ -300,7 +322,12 @@ public class AudioStreamingSource {
 		if (!playing) {
 			alSourcePlay(this.sourceId);
 			this.playTimestamp = System.nanoTime();
-			this.playBufferTimestamp = firstBufferTimestamp;
+			// Resuming a paused source continues at its frozen pause position
+			// (the newly queued buffers play behind the AL-side ones); only a
+			// fresh start anchors the clock to the first queued buffer.
+			if (state != AL_PAUSED) {
+				this.playBufferTimestamp = firstBufferTimestamp;
+			}
 			int stateAfter = alGetSourcei(this.sourceId, AL_SOURCE_STATE);
 			WebStreamerMod.LOGGER.debug("[{}] Started OpenAL source, playBufferTimestamp={} stateAfter={}", this.name, this.playBufferTimestamp, getStateName(stateAfter));
 		}
