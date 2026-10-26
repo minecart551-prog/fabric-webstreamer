@@ -5,6 +5,7 @@ import fr.theorozier.webstreamer.display.DisplayNetworking;
 import fr.theorozier.webstreamer.display.render.DisplayBlockEntityRenderer;
 import fr.theorozier.webstreamer.display.render.DisplayLayerManager;
 import fr.theorozier.webstreamer.jni.NativeLibrary;
+import fr.theorozier.webstreamer.util.WebStreamerNativesManager;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
@@ -61,6 +62,20 @@ public class WebStreamerClientMod implements ClientModInitializer {
 
         // Initialize native library (optional — falls back to JavaCV if unavailable)
         NativeLibrary.init();
+
+        // Download the FFmpeg platform natives at game launch instead of on the
+        // first video after joining a server: the platform JAR is large, and
+        // doing it at join time stalls/crashes clients mid-join. Runs on a
+        // background daemon thread; if natives are already cached this returns
+        // almost immediately. Download-only — the actual System.load of the
+        // libraries stays deferred to first use, because loading them before
+        // the GLFW window exists can interfere with GLX window creation (see
+        // FFmpegLibrary's class javadoc).
+        Thread nativesWarmup = new Thread(
+                () -> WebStreamerNativesManager.warmUp(),
+                "WebStreamer-natives-warmup");
+        nativesWarmup.setDaemon(true);
+        nativesWarmup.start();
 
         // BlockEntityRendererRegistry.register(WebStreamerMod.DISPLAY_BLOCK_ENTITY, DisplayBlockEntityRenderer::new);
         BlockEntityRendererFactories.register(WebStreamerMod.DISPLAY_BLOCK_ENTITY, DisplayBlockEntityRenderer::new);

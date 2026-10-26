@@ -71,10 +71,45 @@ public final class WebStreamerNativesManager {
      * searches {@code java.library.path}. We add our natives directory to
      * {@code java.library.path} via reflection so the Loader can find them.</p>
      *
+     * <p>Synchronized so the launch-time warm-up thread and the render
+     * thread's first-use call can never download/extract concurrently.</p>
+     *
      * @return {@code true} if natives are available and configured,
      *         {@code false} if they could not be obtained.
      */
-    public static boolean setup() {
+    public static synchronized boolean setup() {
+        return setupInternal();
+    }
+
+    /**
+     * Download-only warm-up, run on a background daemon thread at game
+     * launch (see {@code WebStreamerClientMod#onInitializeClient()}). It
+     * performs the same version check / stale cleanup / download as
+     * {@link #setup()} but does <b>not</b> load any native library — the
+     * {@code System.load} and class-linking steps must stay deferred to first
+     * use, because loading FFmpeg natives before the GLFW window exists can
+     * interfere with GLX window creation on some GPUs (see {@code FFmpegLibrary}).
+     *
+     * <p>Moving the (potentially very large) platform-JAR download from the
+     * first video after joining a server to game launch keeps that network
+     * and disk pressure off the join path, where it could stall or crash
+     * clients.</p>
+     *
+     * <p>If this launch-time attempt fails (e.g. offline at launch), the
+     * one-attempt-per-session guard is reset so the first real consumer can
+     * retry once, exactly as if the warm-up had never run.</p>
+     *
+     * @return {@code true} if natives are available and configured
+     */
+    public static synchronized boolean warmUp() {
+        boolean ok = setupInternal();
+        if (!ok) {
+            downloadAttempted = false;
+        }
+        return ok;
+    }
+
+    private static boolean setupInternal() {
 
         String platform;
         try {
