@@ -31,6 +31,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Environment(EnvType.CLIENT)
 public class DisplayLayerVideo extends DisplayLayerSimple {
@@ -106,6 +107,16 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     private final LinkedBlockingQueue<ByteBuffer> bufferPool = new LinkedBlockingQueue<>();
     private Thread decodeThread;
     private volatile boolean decodeFinished = false;
+    /**
+     * Decode-session generation, bumped by every {@link #stopGrabber()} call.
+     * A decode thread captures the value when it starts and abandons its loop
+     * — and releases its grabber from the finally block — as soon as it
+     * differs. stopGrabber() alone cannot invalidate an old thread: restart
+     * paths reset decodeFinished back to false immediately afterwards, which
+     * used to resurrect the old thread alongside its replacement (two threads
+     * decoding into one layer, leaked grabbers, grabber field races).
+     */
+    private final AtomicInteger decodeEpoch = new AtomicInteger();
     private long lastDecodedAudioTs = 0;
     private boolean linearFilterApplied = false;
     // Scratch for draining native-decoded PCM on the decode worker thread;
@@ -267,8 +278,8 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     // Grabber — native path
     // -------------------------------------------------------------------------
 
-    private void startNativeGrabber() {
-        if (this.destroyed || !NativeLibrary.isAvailable()) {
+    private void startNativeGrabber(int epoch) {
+        if (this.destroyed || epoch != this.decodeEpoch.get() || !NativeLibrary.isAvailable()) {
             return;
         }
 
@@ -277,17 +288,19 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             if (!ng.open(this.currentUri)) {
                 WebStreamerMod.LOGGER.info(makeLog("Native grabber failed to open, falling back to JavaCV"));
                 ng.close();
-                startJavaCVGrabberAsync();
+                startJavaCVGrabberAsync(epoch);
                 return;
             }
 
             // Enable rolling packet cache for seeking (30s, 32MB)
             ng.enableCache(30_000_000L, 32 * 1024 * 1024);
 
-            if (this.destroyed || this.decodeFinished) {
+            if (this.destroyed || this.decodeFinished || epoch != this.decodeEpoch.get()) {
                 // Layer was stopped while the open was in flight.
                 ng.close();
-                this.grabberPending = false;
+                if (epoch == this.decodeEpoch.get()) {
+                    this.grabberPending = false;
+                }
                 return;
             }
 
@@ -323,9 +336,11 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             }
 
         } catch (Throwable e) {
-            WebStreamerMod.LOGGER.error(makeLog("Failed to start native decoder"), e);
-            this.grabberFailed = true;
-            this.grabberPending = false;
+            if (epoch == this.decodeEpoch.get()) {
+                WebStreamerMod.LOGGER.error(makeLog("Failed to start native decoder"), e);
+                this.grabberFailed = true;
+                this.grabberPending = false;
+            }
         }
     }
 
@@ -341,27 +356,29 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             this.grabberPending = false;
             return;
         }
+        final int epoch = this.decodeEpoch.get();
         this.decodeThread = new Thread(() -> {
             FFmpegFrameGrabber localGrabber = null;
             try {
                 // Blocking network open (DNS/TLS/avformat) happens here.
-                startNativeGrabber();
+                startNativeGrabber(epoch);
                 localGrabber = this.grabber;
-                if (this.destroyed) {
+                if (this.destroyed || epoch != this.decodeEpoch.get()) {
                     return;
                 }
                 if (this.grabberReady && this.useNative && !this.decodeFinished) {
-                    nativeDecodeLoop();
+                    nativeDecodeLoop(epoch);
                 } else if (this.grabberReady && !this.useNative) {
                     // Native open failed and fell back to the JavaCV path.
-                    backgroundDecodeLoop();
+                    backgroundDecodeLoop(epoch);
                 } else if (this.grabberPending && !this.grabberFailed) {
                     // Nothing was started (e.g. stopped while opening); let
                     // the next tick retry.
                     this.grabberPending = false;
                 }
             } finally {
-                if (localGrabber != null && (this.destroyed || this.decodeFinished)) {
+                if (localGrabber != null
+                        && (this.destroyed || this.decodeFinished || epoch != this.decodeEpoch.get())) {
                     try { localGrabber.releaseUnsafe(); } catch (Exception ignored) { }
                 }
             }
@@ -381,7 +398,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
      * off-screen displays (via tickNative's uploadVisible), matching the
      * JavaCV path and isVisibleUploadOnly's documented semantics.
      */
-    private void nativeDecodeLoop() {
+    private void nativeDecodeLoop(int epoch) {
         // decodeToPending() returns false only on abnormal conditions (IO/JNI
         // error, end of stream, closed handle) — count consecutive failures so
         // real problems surface as grabber failures (which log + restart)
@@ -390,7 +407,8 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         int consecutiveFailures = 0;
         try {
             while (!this.destroyed && this.useNative && this.grabberReady
-                    && this.nativeGrabber != null && !this.decodeFinished) {
+                    && this.nativeGrabber != null && !this.decodeFinished
+                    && epoch == this.decodeEpoch.get()) {
                 NativeFrameGrabber ng = this.nativeGrabber;
                 if (ng == null) {
                     break;
@@ -417,14 +435,15 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                             // restarting immediately would cut the video's
                             // ending (the audio tail meanwhile plays to the
                             // true end from OpenAL's queue).
-                            if (!this.drainNativeTail(ng)) {
+                            if (!this.drainNativeTail(ng, epoch)) {
                                 break; // stopped/destroyed while waiting
                             }
                             this.decodeFinished = true;
                             break;
                         }
-                        if (!this.loopNativeVideo()) {
-                            if (this.grabberReady && !this.destroyed && !this.decodeFinished) {
+                        if (!this.loopNativeVideo(epoch)) {
+                            if (this.grabberReady && !this.destroyed && !this.decodeFinished
+                                    && epoch == this.decodeEpoch.get()) {
                                 WebStreamerMod.LOGGER.error(makeLog("Native video loop failed to reopen."));
                                 this.grabberFailed = true;
                             }
@@ -434,7 +453,8 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                         continue;
                     }
                     if (++consecutiveFailures >= MAX_FAILED_GRABS) {
-                        if (this.grabberReady && !this.destroyed && !this.decodeFinished) {
+                        if (this.grabberReady && !this.destroyed && !this.decodeFinished
+                                && epoch == this.decodeEpoch.get()) {
                             WebStreamerMod.LOGGER.error(makeLog(
                                     "Native decode failed {} consecutive times, marking grabber as failed."),
                                     consecutiveFailures);
@@ -460,7 +480,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } catch (Exception e) {
-            if (!this.destroyed) {
+            if (!this.destroyed && epoch == this.decodeEpoch.get()) {
                 WebStreamerMod.LOGGER.error(makeLog("Background native decode failed"), e);
                 this.grabberFailed = true;
             }
@@ -642,8 +662,8 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     // Grabber — JavaCV path (original)
     // -------------------------------------------------------------------------
 
-    private void startJavaCVGrabberAsync() {
-        if (this.destroyed) {
+    private void startJavaCVGrabberAsync(int epoch) {
+        if (this.destroyed || epoch != this.decodeEpoch.get()) {
             return;
         }
 
@@ -651,7 +671,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         FFmpegLibrary.ensureInitialized();
 
         ShortBuffer audioBuf = this.res.allocAudioBuffer();
-        if (this.destroyed) {
+        if (this.destroyed || epoch != this.decodeEpoch.get()) {
             this.res.freeAudioBuffer(audioBuf);
             return;
         }
@@ -672,7 +692,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
             Frame frame;
             PooledVideoFrame firstFrame = null;
-            while ((frame = fg.grab()) != null) {
+            while (epoch == this.decodeEpoch.get() && (frame = fg.grab()) != null) {
                 if (frame.image != null) {
                     ByteBuffer buf = this.bufferPool.poll();
                     if (buf != null) {
@@ -692,11 +712,18 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 }
             }
 
-            if (this.destroyed) {
+            if (this.destroyed || epoch != this.decodeEpoch.get()) {
+                // Stopped/destroyed while the open (or first-frame prefetch)
+                // was in flight — never publish this grabber to the layer.
                 fg.releaseUnsafe();
                 this.res.freeAudioBuffer(audioBuf);
-                this.bufferPool.clear();
-                this.grabberPending = false;
+                if (epoch == this.decodeEpoch.get()) {
+                    // Still the current session: this call owns the pool fill
+                    // and the pending flag. A superseded thread must not touch
+                    // either — stopGrabber() already cleared them.
+                    this.bufferPool.clear();
+                    this.grabberPending = false;
+                }
                 return;
             }
 
@@ -730,22 +757,38 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             }
 
         } catch (Throwable e) {
-            WebStreamerMod.LOGGER.error(makeLog("Failed to start video stream."), e);
+            if (epoch == this.decodeEpoch.get()) {
+                WebStreamerMod.LOGGER.error(makeLog("Failed to start video stream."), e);
+                this.bufferPool.clear();
+                this.grabberFailed  = true;
+                this.grabberPending = false;
+            }
             this.res.freeAudioBuffer(audioBuf);
-            this.bufferPool.clear();
-            this.grabberFailed  = true;
-            this.grabberPending = false;
         }
     }
 
-    private void backgroundDecodeLoop() {
+    private void backgroundDecodeLoop(int epoch) {
         try {
-            while (!this.destroyed && !this.decodeFinished) {
+            while (!this.destroyed && !this.decodeFinished && epoch == this.decodeEpoch.get()) {
                 ByteBuffer buf = this.bufferPool.poll(100, TimeUnit.MILLISECONDS);
                 if (buf == null) {
                     continue;
                 }
-                Frame frame = this.grabber.grab();
+                FFmpegFrameGrabber fg = this.grabber;
+                if (fg == null || epoch != this.decodeEpoch.get()) {
+                    // Superseded between the loop check and here; hand the
+                    // buffer back and let the replacement thread own the layer.
+                    this.bufferPool.add(buf);
+                    break;
+                }
+                Frame frame = fg.grab();
+                if (epoch != this.decodeEpoch.get()) {
+                    // Stopped or restarted while blocked in grab(): this frame
+                    // belongs to the dying session — drop it and exit instead
+                    // of queueing it into the replacement session.
+                    this.bufferPool.add(buf);
+                    break;
+                }
                 if (frame == null) {
                     this.bufferPool.add(buf);
                     boolean playlistSource = this.display != null && (
@@ -755,7 +798,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                         this.decodeFinished = true;
                         break;
                     }
-                    this.loopVideo();
+                    this.loopVideo(epoch);
                     continue;
                 }
                 if (frame.image != null) {
@@ -778,7 +821,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } catch (Exception e) {
-            if (!this.destroyed) {
+            if (!this.destroyed && epoch == this.decodeEpoch.get()) {
                 WebStreamerMod.LOGGER.error(makeLog("Background decode failed"), e);
                 this.grabberFailed = true;
                 this.decodeFinished = true;
@@ -787,16 +830,19 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     }
 
     private void startSetup() {
+        final int epoch = this.decodeEpoch.get();
         this.decodeThread = new Thread(() -> {
             FFmpegFrameGrabber localGrabber = null;
             try {
-                startJavaCVGrabberAsync();
+                startJavaCVGrabberAsync(epoch);
                 localGrabber = this.grabber;
-                if (this.grabberReady && !this.destroyed && !this.useNative) {
-                    backgroundDecodeLoop();
+                if (this.grabberReady && !this.destroyed && !this.useNative
+                        && epoch == this.decodeEpoch.get()) {
+                    backgroundDecodeLoop(epoch);
                 }
             } finally {
-                if (localGrabber != null && (this.destroyed || this.decodeFinished)) {
+                if (localGrabber != null
+                        && (this.destroyed || this.decodeFinished || epoch != this.decodeEpoch.get())) {
                     try { localGrabber.releaseUnsafe(); } catch (Exception ignored) { }
                 }
             }
@@ -890,6 +936,11 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     }
 
     private void stopGrabber() {
+        // Invalidate any running decode thread before anything else — see
+        // decodeEpoch. Bumped even when the flags below say there is nothing
+        // to stop: a previous stop may have cleared them while the old thread
+        // is still winding down out of a blocking native grab().
+        this.decodeEpoch.incrementAndGet();
         if (!this.grabberReady && !this.grabberPending) {
             return;
         }
@@ -1020,7 +1071,12 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         return RESTART_NO_PLAYLIST;
     }
 
-    private void loopVideo() {
+    private void loopVideo(int epoch) {
+        if (epoch != this.decodeEpoch.get()) {
+            // Superseded while blocked in grab(): the replacement session owns
+            // this.grabber now, so do not release or recreate it from here.
+            return;
+        }
         WebStreamerMod.LOGGER.debug(makeLog("Video loop restart"));
         this.playbackMicros = 0;
         this.refTimestamp = -1;
@@ -1048,7 +1104,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
     /**
      * Restart the current video from the beginning when a single (non-playlist)
-     * video reaches its end, mirroring {@link #loopVideo()} for the native path.
+     * video reaches its end, mirroring {@link #loopVideo(int)} for the native path.
      * Runs on the native decode thread (the blocking reopen is fine there, just
      * like loopVideo()'s startUnsafe() on the JavaCV decode thread).
      *
@@ -1079,9 +1135,10 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
      * cleared and the fresh session doesn't produce a chunk until this method
      * returns, so no in-flight timestamp can be re-bridged.</p>
      *
+     * @param epoch the decode session generation of the calling decode thread
      * @return true if the native grabber was reopened on the same URI
      */
-    private boolean loopNativeVideo() {
+    private boolean loopNativeVideo(int epoch) {
         WebStreamerMod.LOGGER.debug(makeLog("Video loop restart (native)"));
 
         // 1. Open the next playthrough (blocking network open) while the
@@ -1096,16 +1153,20 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
         // 2. Wait for the tail to be consumed (audio ring drained along the way).
         NativeFrameGrabber old = this.nativeGrabber;
-        if (old == null || !this.drainNativeTail(old)) {
+        if (old == null || !this.drainNativeTail(old, epoch)) {
             try {
                 fresh.close();
             } catch (Throwable ignored) { }
             return false;
         }
 
-        // 3. The reopen + drain blocked; bail out if the layer was stopped
-        //    meanwhile (stopGrabber nulls nativeGrabber / clears grabberReady).
-        if (this.destroyed || this.decodeFinished || !this.grabberReady || !this.useNative) {
+        // 3. The reopen + drain blocked; bail out if the layer was stopped or
+        //    restarted meanwhile (stopGrabber bumps the epoch / nulls
+        //    nativeGrabber / clears grabberReady). The epoch check matters
+        //    most here: without it a superseded thread could swap `fresh`
+        //    over the replacement session's grabber.
+        if (this.destroyed || this.decodeFinished || !this.grabberReady || !this.useNative
+                || epoch != this.decodeEpoch.get()) {
             try {
                 fresh.close();
             } catch (Throwable ignored) { }
@@ -1158,15 +1219,17 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
      * the last PCM still reaches OpenAL. Called from the decode thread.
      *
      * @param ng the grabber whose queued frames should be consumed
-     * @return false if the layer was stopped/destroyed while waiting (the
-     *         caller should abandon the restart); true when fully drained or
-     *         when the wait timed out (paused/off-screen layer — the restart
-     *         then falls back to the old immediate behavior)
+     * @param epoch the decode session generation of the calling decode thread
+     * @return false if the layer was stopped/destroyed or restarted while
+     *         waiting (the caller should abandon the restart); true when fully
+     *         drained or when the wait timed out (paused/off-screen layer — the
+     *         restart then falls back to the old immediate behavior)
      */
-    private boolean drainNativeTail(NativeFrameGrabber ng) {
+    private boolean drainNativeTail(NativeFrameGrabber ng, int epoch) {
         long deadline = System.nanoTime() + TAIL_DRAIN_TIMEOUT_NS;
         while (ng.hasPendingFrames()
                 && !this.destroyed && !this.decodeFinished
+                && epoch == this.decodeEpoch.get()
                 && this.grabberReady && this.useNative) {
             drainNativeAudio();
             try {
@@ -1180,7 +1243,8 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 break;
             }
         }
-        return !this.destroyed && !this.decodeFinished && this.grabberReady && this.useNative;
+        return !this.destroyed && !this.decodeFinished && epoch == this.decodeEpoch.get()
+                && this.grabberReady && this.useNative;
     }
 
     // -------------------------------------------------------------------------

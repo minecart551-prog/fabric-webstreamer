@@ -24,6 +24,7 @@ import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Environment(EnvType.CLIENT)
 public class DisplayLayerGif extends DisplayLayerSimple {
@@ -65,6 +66,17 @@ public class DisplayLayerGif extends DisplayLayerSimple {
     private final LinkedBlockingQueue<ByteBuffer> bufferPool = new LinkedBlockingQueue<>();
     private Thread decodeThread;
     private volatile boolean decodeFinished = false;
+    /**
+     * Decode-session generation, bumped by every {@link #stopGrabber()} call.
+     * A decode thread captures the value when it starts and abandons its loop
+     * — releasing only the grabber it opened itself — as soon as it differs.
+     * stopGrabber() alone cannot invalidate an old thread: the failure-retry
+     * path resets decodeFinished back to false immediately afterwards, which
+     * used to resurrect the old thread alongside its replacement (two threads
+     * decoding into one layer, and an old finally clobbering the new
+     * session's grabber/flags/temp file).
+     */
+    private final AtomicInteger decodeEpoch = new AtomicInteger();
     private final boolean randomStartFrame;
 
     private static class PooledGifFrame {
@@ -165,36 +177,53 @@ public class DisplayLayerGif extends DisplayLayerSimple {
     }
 
     private void startSetup() {
+        final int epoch = this.decodeEpoch.get();
         this.decodeThread = new Thread(() -> {
+            FFmpegFrameGrabber localGrabber = null;
+            Path localTempFile = null;
             try {
-                downloadAndOpenGrabber();
-                if (this.grabberReady && !this.destroyed) {
-                    backgroundDecodeLoop();
+                localGrabber = downloadAndOpenGrabber(epoch);
+                if (localGrabber != null) {
+                    localTempFile = this.tempFile;
+                }
+                if (this.grabberReady && !this.destroyed && epoch == this.decodeEpoch.get()) {
+                    backgroundDecodeLoop(epoch);
                 }
             } finally {
                 // Decode thread owns the grabber lifecycle.
                 // Release in finally to prevent use-after-free when stopGrabber()
                 // signals decodeFinished + interrupt while we're mid-grab().
-                this.grabberReady = false;
-                this.grabberPending = false;
-                if (this.grabber != null) {
-                    try { this.grabber.releaseUnsafe(); } catch (Exception ignored) { }
-                    this.grabber = null;
+                // A superseded thread (epoch differs) releases only what it
+                // opened itself and leaves the shared flags alone — the
+                // replacement session owns those now.
+                if (epoch == this.decodeEpoch.get()) {
+                    this.grabberReady = false;
+                    this.grabberPending = false;
                 }
-                deleteTempFile(this.tempFile);
-                this.tempFile = null;
+                if (localGrabber != null) {
+                    try { localGrabber.releaseUnsafe(); } catch (Exception ignored) { }
+                    if (this.grabber == localGrabber) {
+                        this.grabber = null;
+                    }
+                }
+                if (localTempFile != null) {
+                    deleteTempFile(localTempFile);
+                    if (this.tempFile == localTempFile) {
+                        this.tempFile = null;
+                    }
+                }
             }
         }, "WebStreamer-gif-" + Integer.toHexString(System.identityHashCode(this)));
         this.decodeThread.setDaemon(true);
         this.decodeThread.start();
     }
 
-    private void downloadAndOpenGrabber() {
-        if (this.destroyed) return;
+    private FFmpegFrameGrabber downloadAndOpenGrabber(int epoch) {
+        if (this.destroyed || epoch != this.decodeEpoch.get()) return null;
 
         if (this.uri.getScheme() == null) {
             WebStreamerMod.LOGGER.error("[DisplayLayerGif] URI has no scheme: {}", this.uri);
-            return;
+            return null;
         }
 
         FFmpegLibrary.ensureInitialized();
@@ -220,14 +249,25 @@ public class DisplayLayerGif extends DisplayLayerSimple {
                 Files.copy(body, tmp, StandardCopyOption.REPLACE_EXISTING);
             }
 
-            if (this.destroyed) {
+            if (this.destroyed || epoch != this.decodeEpoch.get()) {
                 deleteTempFile(tmp);
-                this.grabberPending = false;
-                return;
+                if (epoch == this.decodeEpoch.get()) {
+                    this.grabberPending = false;
+                }
+                return null;
             }
 
             FFmpegFrameGrabber fg = new FFmpegFrameGrabber(tmp.toString());
             fg.startUnsafe();
+
+            if (this.destroyed || epoch != this.decodeEpoch.get()) {
+                // Stopped while startUnsafe() was blocking — this grabber was
+                // never published to the layer, so release it right here
+                // instead of letting a superseded thread's finally find it.
+                try { fg.releaseUnsafe(); } catch (Exception ignored) { }
+                deleteTempFile(tmp);
+                return null;
+            }
 
             this.grabber = fg;
             this.tempFile = tmp;
@@ -259,42 +299,63 @@ public class DisplayLayerGif extends DisplayLayerSimple {
             this.grabberReady = true;
             this.grabberPending = false;
 
+            return fg;
+
         } catch (Throwable e) {
-            if (!this.destroyed) {
+            if (!this.destroyed && epoch == this.decodeEpoch.get()) {
                 WebStreamerMod.LOGGER.error(makeLog("Failed to start GIF grabber."), e);
                 this.grabberFailed = true;
             }
             deleteTempFile(tmp);
-            this.grabberPending = false;
+            if (epoch == this.decodeEpoch.get()) {
+                this.grabberPending = false;
+            }
+            return null;
         }
     }
 
-    private void backgroundDecodeLoop() {
+    private void backgroundDecodeLoop(int epoch) {
         try {
-            while (!this.destroyed && !this.decodeFinished) {
+            while (!this.destroyed && !this.decodeFinished && epoch == this.decodeEpoch.get()) {
                 // Pause decoding while the display is out of range or off screen:
                 // there is nobody to watch it, so keep the queue from running ahead
                 // of the playback clock (which is what caused a fast-forward burst
                 // when coming back into range).
-                while (!this.destroyed && !this.decodeFinished && !this.shouldDecode()) {
+                while (!this.destroyed && !this.decodeFinished
+                        && epoch == this.decodeEpoch.get() && !this.shouldDecode()) {
                     Thread.sleep(10);
                 }
-                if (this.destroyed || this.decodeFinished) break;
+                if (this.destroyed || this.decodeFinished || epoch != this.decodeEpoch.get()) break;
 
                 // Throttle: wait if too many frames are pending (prevents unbounded memory growth)
-                while (!this.destroyed && !this.decodeFinished && this.pendingFrames.size() >= MAX_PENDING_FRAMES) {
+                while (!this.destroyed && !this.decodeFinished
+                        && epoch == this.decodeEpoch.get() && this.pendingFrames.size() >= MAX_PENDING_FRAMES) {
                     Thread.sleep(10);
                 }
-                if (this.destroyed || this.decodeFinished) break;
+                if (this.destroyed || this.decodeFinished || epoch != this.decodeEpoch.get()) break;
 
                 ByteBuffer buf = this.bufferPool.poll(100, TimeUnit.MILLISECONDS);
                 if (buf == null) {
                     continue;
                 }
-                Frame frame = this.grabber.grab();
+                FFmpegFrameGrabber fg = this.grabber;
+                if (fg == null || epoch != this.decodeEpoch.get()) {
+                    // Superseded between the loop check and here; hand the
+                    // buffer back and let the replacement thread own the layer.
+                    this.bufferPool.add(buf);
+                    break;
+                }
+                Frame frame = fg.grab();
+                if (epoch != this.decodeEpoch.get()) {
+                    // Stopped or restarted while blocked in grab(): this frame
+                    // belongs to the dying session — drop it and exit instead
+                    // of queueing it into the replacement session.
+                    this.bufferPool.add(buf);
+                    break;
+                }
                 if (frame == null) {
                     this.bufferPool.add(buf);
-                    this.loopGif();
+                    this.loopGif(epoch);
                     continue;
                 }
                 if (frame.image != null) {
@@ -318,7 +379,7 @@ public class DisplayLayerGif extends DisplayLayerSimple {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } catch (Exception e) {
-            if (!this.destroyed) {
+            if (!this.destroyed && epoch == this.decodeEpoch.get()) {
                 WebStreamerMod.LOGGER.error(makeLog("Background GIF decode failed"), e);
                 this.grabberFailed = true;
                 this.decodeFinished = true;
@@ -326,7 +387,12 @@ public class DisplayLayerGif extends DisplayLayerSimple {
         }
     }
 
-    private void loopGif() {
+    private void loopGif(int epoch) {
+        if (epoch != this.decodeEpoch.get()) {
+            // Superseded while blocked in grab(): the replacement session owns
+            // this.grabber now, so do not seek or recreate it from here.
+            return;
+        }
         WebStreamerMod.LOGGER.debug(makeLog("GIF loop restart"));
         // The decode thread only owns the grabber side of the loop. The playback
         // clock (playbackMicros/lastTickNanos) belongs to the render thread and is
@@ -355,6 +421,11 @@ public class DisplayLayerGif extends DisplayLayerSimple {
     }
 
     private void stopGrabber() {
+        // Invalidate any running decode thread before anything else — see
+        // decodeEpoch. Bumped even when the flags below say there is nothing
+        // to stop: a previous stop may have cleared them while the old thread
+        // is still winding down out of grab().
+        this.decodeEpoch.incrementAndGet();
         if (!this.grabberReady && !this.grabberPending) return;
         this.decodeFinished = true;
         Thread dt = this.decodeThread;
