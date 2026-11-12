@@ -286,7 +286,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
         try {
             NativeFrameGrabber ng = new NativeFrameGrabber();
             if (!ng.open(this.currentUri)) {
-                WebStreamerMod.LOGGER.info(makeLog("Native grabber failed to open, falling back to JavaCV"));
+                WebStreamerConfig.debugLog(makeLog("Native grabber failed to open, falling back to JavaCV"));
                 ng.close();
                 startJavaCVGrabberAsync(epoch);
                 return;
@@ -337,7 +337,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
         } catch (Throwable e) {
             if (epoch == this.decodeEpoch.get()) {
-                WebStreamerMod.LOGGER.error(makeLog("Failed to start native decoder"), e);
+                WebStreamerConfig.debugLog(makeLog("Failed to start native decoder"), e);
                 this.grabberFailed = true;
                 this.grabberPending = false;
             }
@@ -481,7 +481,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             Thread.currentThread().interrupt();
         } catch (Exception e) {
             if (!this.destroyed && epoch == this.decodeEpoch.get()) {
-                WebStreamerMod.LOGGER.error(makeLog("Background native decode failed"), e);
+                WebStreamerConfig.debugLog(makeLog("Background native decode failed"), e);
                 this.grabberFailed = true;
             }
         } finally {
@@ -758,7 +758,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
         } catch (Throwable e) {
             if (epoch == this.decodeEpoch.get()) {
-                WebStreamerMod.LOGGER.error(makeLog("Failed to start video stream."), e);
+                WebStreamerConfig.debugLog(makeLog("Failed to start video stream."), e);
                 this.bufferPool.clear();
                 this.grabberFailed  = true;
                 this.grabberPending = false;
@@ -822,7 +822,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
             Thread.currentThread().interrupt();
         } catch (Exception e) {
             if (!this.destroyed && epoch == this.decodeEpoch.get()) {
-                WebStreamerMod.LOGGER.error(makeLog("Background decode failed"), e);
+                WebStreamerConfig.debugLog(makeLog("Background decode failed"), e);
                 this.grabberFailed = true;
                 this.decodeFinished = true;
             }
@@ -1095,7 +1095,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                 fg.startUnsafe();
                 this.grabber = fg;
             } catch (Throwable e) {
-                WebStreamerMod.LOGGER.error(makeLog("Failed to loop video."), e);
+                WebStreamerConfig.debugLog(makeLog("Failed to loop video."), e);
                 this.stopGrabber();
                 this.grabberFailed = true;
             }
@@ -1464,8 +1464,7 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
 
         } catch (Exception e) {
             this.failedGrabs++;
-            WebStreamerMod.LOGGER.error(makeLog("Failed to grab frame ({}/{})."),
-                    this.failedGrabs, MAX_FAILED_GRABS, e);
+            WebStreamerConfig.debugLog(makeLog("Failed to grab frame ({}/{})."), this.failedGrabs, MAX_FAILED_GRABS, e);
             if (this.failedGrabs >= MAX_FAILED_GRABS) {
                 WebStreamerMod.LOGGER.error(makeLog("Too many failed grabs, marking layer as lost."));
                 this.stopGrabber();

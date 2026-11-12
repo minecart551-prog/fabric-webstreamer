@@ -301,10 +301,10 @@ public class YoutubeDisplaySource extends DisplaySource {
             for (String id : this.videoIds) {
                 WebStreamerClientMod.YOUTUBE_CLIENT.forgetPlaylist(id);
             }
-            WebStreamerMod.LOGGER.info("Forgot YouTube playlist for {} videos", this.videoIds.size());
+            WebStreamerConfig.debugLog("Forgot YouTube playlist for {} videos", this.videoIds.size());
         } else if (this.videoId != null) {
             WebStreamerClientMod.YOUTUBE_CLIENT.forgetPlaylist(this.videoId);
-            WebStreamerMod.LOGGER.info("Forgot YouTube playlist for video '{}'", this.videoId);
+            WebStreamerConfig.debugLog("Forgot YouTube playlist for video '{}'", this.videoId);
         }
     }
 
