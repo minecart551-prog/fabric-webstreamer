@@ -34,8 +34,13 @@ public class ServerSourceRegistry {
 
     /**
      * Load (or reload) the sources file. Creates the file and directory if missing.
-     * Also starts the embedded HTTP server for local file serving.
      * Called once from {@link fr.theorozier.webstreamer.WebStreamerMod#onInitialize()}.
+     *
+     * <p>The embedded HTTP file server is <b>not</b> started here. It is only started
+     * when a world/server actually starts (see the {@code SERVER_STARTING} hook calling
+     * {@link #restartHttpServerIfNeeded(Path)}), so dedicated servers, singleplayer worlds
+     * and LAN hosts get it, while multiplayer clients don't bind {@code 0.0.0.0:25600}
+     * and serve an empty config directory to the network for no reason.</p>
      */
     public static void load(Path configDir) {
         Path dir = configDir.resolve("webstreamer");
@@ -51,17 +56,8 @@ public class ServerSourceRegistry {
             return;
         }
 
-        // Read server.properties for HTTP port
-        int httpPort = WebStreamerHttpServer.DEFAULT_PORT;
-        if (Files.exists(propsFile)) {
-            Properties props = new Properties();
-            try (InputStream is = Files.newInputStream(propsFile)) {
-                props.load(is);
-                httpPort = Integer.parseInt(props.getProperty("http-port", String.valueOf(WebStreamerHttpServer.DEFAULT_PORT)));
-            } catch (Exception e) {
-                WebStreamerMod.LOGGER.warn("[Server] Failed to read server.properties, using default port {}: {}", WebStreamerHttpServer.DEFAULT_PORT, e.getMessage());
-            }
-        } else {
+        // Read server.properties, creating a default one if missing
+        if (!Files.exists(propsFile)) {
             // Create default server.properties
             try (OutputStream os = Files.newOutputStream(propsFile)) {
                 Properties props = new Properties();
@@ -84,7 +80,9 @@ public class ServerSourceRegistry {
             }
         }
 
-        startHttpServer(filesDir, httpPort);
+        // The embedded HTTP server is started from the SERVER_STARTING hook
+        // (restartHttpServerIfNeeded), not at mod init: clients must not bind
+        // the file-serving port at all.
 
         // Apply the configured HTTP IP (if any) so local paths get the correct
         // host in their resolved HTTP URLs.

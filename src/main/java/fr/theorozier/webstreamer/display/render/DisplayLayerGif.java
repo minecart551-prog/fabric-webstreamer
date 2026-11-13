@@ -62,6 +62,16 @@ public class DisplayLayerGif extends DisplayLayerSimple {
      * used to detect a resume and realign playback before fast-forwarding. */
     private boolean lastShouldDecode = true;
 
+    /**
+     * Set by the decode thread when it restarts the GIF from the beginning
+     * (loop or auto-retry after a failure). The playback clock belongs to the
+     * render thread, so the decode thread cannot reset it directly — it raises
+     * this flag and the next {@link #tick()} rewinds playback instead. Without
+     * this, frames timestamped from 0 are all instantly "due" and get flushed
+     * in one tick, showing up as the GIF jumping to super speed after every loop.
+     */
+    private volatile boolean rewindRequested = false;
+
     private final Queue<PooledGifFrame> pendingFrames = new ConcurrentLinkedQueue<>();
     private final LinkedBlockingQueue<ByteBuffer> bufferPool = new LinkedBlockingQueue<>();
     private Thread decodeThread;
@@ -396,9 +406,11 @@ public class DisplayLayerGif extends DisplayLayerSimple {
         WebStreamerMod.LOGGER.debug(makeLog("GIF loop restart"));
         // The decode thread only owns the grabber side of the loop. The playback
         // clock (playbackMicros/lastTickNanos) belongs to the render thread and is
-        // realigned on resume, so it must not be touched here.
+        // realigned on resume, so it must not be touched here — ask the next
+        // tick() to rewind instead (see rewindRequested).
         this.pendingFrames.clear();
         this.decodePositionMicros = 0;
+        this.rewindRequested = true;
         if (this.grabber != null) {
             try {
                 this.grabber.setTimestamp(0);
@@ -498,6 +510,7 @@ public class DisplayLayerGif extends DisplayLayerSimple {
                 this.grabberReady = false;
                 this.grabberPending = false;
                 this.decodeFinished = false;
+                this.rewindRequested = true;
             }
             return;
         }
@@ -513,7 +526,16 @@ public class DisplayLayerGif extends DisplayLayerSimple {
         boolean shouldDecode = this.shouldDecode();
 
         long now = System.nanoTime();
-        if (shouldDecode && !this.lastShouldDecode) {
+        if (this.rewindRequested) {
+            // The decode thread restarted from frame 0 (loop/auto-retry): rewind
+            // the playback clock with it. Otherwise every freshly decoded frame
+            // is instantly due and the GIF plays at decode speed.
+            this.pendingFrames.clear();
+            this.playbackMicros = 0;
+            this.lastTickNanos = now;
+            this.lastShouldDecode = true;
+            this.rewindRequested = false;
+        } else if (shouldDecode && !this.lastShouldDecode) {
             // Decode was paused (off screen) and just became needed again.
             // Realign the playback clock to where the decoder currently is and
             // drop the stale backlog, so playback resumes without fast-forwarding

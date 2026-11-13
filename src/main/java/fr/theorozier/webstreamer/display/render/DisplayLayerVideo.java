@@ -43,6 +43,13 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     private static final int MAX_FAILED_GRABS = 5;
     private static final int FRAME_BUFFER_POOL_SIZE = 24;
     private static final int FRAME_BUFFER_SIZE = 1 * 1024 * 1024;
+    /**
+     * Max frames the decode thread may run ahead of the render thread. Without
+     * this, a faster-than-realtime decoder piles up fresh (unpooled) direct
+     * buffers without bound — HD frames exceed the pool slots, so every frame
+     * allocates its own buffer and the queue grows until direct memory runs out.
+     */
+    private static final int MAX_PENDING_FRAMES = 8;
 
     /**
      * Dedicated daemon thread for closing native decode sessions. nClose can
@@ -700,6 +707,10 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                         int srcPos = src.position();
                         int needed = src.remaining();
                         if (buf.capacity() < needed) {
+                            // Hand the too-small pooled buffer back before
+                            // allocating a larger one, so the pool isn't drained
+                            // one slot at a time by oversized frames.
+                            this.bufferPool.add(buf);
                             buf = ByteBuffer.allocateDirect(needed);
                         }
                         buf.clear();
@@ -770,6 +781,15 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
     private void backgroundDecodeLoop(int epoch) {
         try {
             while (!this.destroyed && !this.decodeFinished && epoch == this.decodeEpoch.get()) {
+                // Throttle: wait if too many frames are pending. Without this the
+                // decoder runs ahead of the render thread and grows the direct
+                // buffer queue unboundedly.
+                while (!this.destroyed && !this.decodeFinished
+                        && epoch == this.decodeEpoch.get() && this.pendingVideoFrames.size() >= MAX_PENDING_FRAMES) {
+                    Thread.sleep(10);
+                }
+                if (this.destroyed || this.decodeFinished || epoch != this.decodeEpoch.get()) break;
+
                 ByteBuffer buf = this.bufferPool.poll(100, TimeUnit.MILLISECONDS);
                 if (buf == null) {
                     continue;
@@ -806,6 +826,9 @@ public class DisplayLayerVideo extends DisplayLayerSimple {
                     int srcPos = src.position();
                     int needed = src.remaining();
                     if (buf.capacity() < needed) {
+                        // Return the pooled buffer before allocating a larger one
+                        // so the pool isn't drained by oversized frames.
+                        this.bufferPool.add(buf);
                         buf = ByteBuffer.allocateDirect(needed);
                     }
                     buf.clear();
